@@ -1,20 +1,20 @@
 {
   "click_positions": {
     "right": {
-      "x": 95,
-      "y": 50
+      "x": 2126,
+      "y": 699
     },
     "left": {
-      "x": 5,
-      "y": 50
+      "x": 437,
+      "y": 651
     },
     "up": {
-      "x": 50,
-      "y": 5
+      "x": 1281,
+      "y": 60
     },
     "down": {
-      "x": 50,
-      "y": 95
+      "x": 1311,
+      "y": 1069
     }
   },
   "move_delay": 4.0,
@@ -25,7 +25,26 @@
     "x2": 200,
     "y2": 50
   },
-  "known_zaaps": [],
+  "known_zaaps": [
+    "Amakna Château",
+    "Amakna Village",
+    "Astrub",
+    "Astrub Centre",
+    "Bonta",
+    "Bord de Forêt",
+    "Brakmar",
+    "Coin des Bouftous",
+    "Frigost Village",
+    "Moon",
+    "Pandala",
+    "Plaine des Scarafeuilles",
+    "Port Madrestam",
+    "Sufokia",
+    "Tainéla",
+    "Taverne Astrub",
+    "Village des Dopeuls"
+  ],
   "favorites": [],
-  "resolution": "1920x1080"
+  "resolution": "1920x1080",
+  "use_zaaps": true
 }

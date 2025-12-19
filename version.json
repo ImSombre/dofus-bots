@@ -1,6 +1,6 @@
 {
     "version": "1.2.0",
-    "changelog": "Nouveau: Travel Bot v2.0 - Déplacement automatique intelligent avec pathfinding A* et Zaaps",
+    "changelog": "Travel Bot v3.0 - 100% automatique avec OCR et Zaaps auto",
     "files": [
         {"path": "hub.py"},
         {"path": "version.json"},

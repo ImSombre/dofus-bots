@@ -70,7 +70,7 @@ class HubConfig:
 
 
 # Version locale
-LOCAL_VERSION = "1.0.0"
+LOCAL_VERSION = "1.2.0"
 
 # ============================================================
 #                    THÈME
@@ -275,7 +275,7 @@ BOTS = [
         "id": "travel",
         "name": "🗺️ Travel Bot",
         "description": "Déplacement automatique intelligent\nPathfinding A* • Zaaps • Chemin optimal",
-        "version": "1.0",
+        "version": "3.0",
         "script": "bots/travel/bot_travel.py",
         "color": "#4cc9f0",
         "icon": "🗺️"
