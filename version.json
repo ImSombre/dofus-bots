@@ -1,0 +1,9 @@
+{
+    "version": "1.0.0",
+    "changelog": "Version initiale du Hub",
+    "files": [
+        {"path": "hub.py"},
+        {"path": "bots/farming/bot.py"},
+        {"path": "bots/combat/bot_combat.py"}
+    ]
+}
