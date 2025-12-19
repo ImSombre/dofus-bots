@@ -23,6 +23,137 @@ except:
     HAS_REQUESTS = False
 
 # ============================================================
+#                    SYSTÈME DE MISE À JOUR
+# ============================================================
+class Updater:
+    def __init__(self, config, callback=None):
+        self.config = config
+        self.callback = callback
+        self.current_version = self.get_local_version()
+    
+    def log(self, msg):
+        if self.callback:
+            self.callback(msg)
+    
+    def get_local_version(self):
+        version_file = os.path.join(self.config.base_dir, "version.json")
+        if os.path.exists(version_file):
+            try:
+                with open(version_file, 'r') as f:
+                    return json.load(f).get("version", "1.0.0")
+            except:
+                pass
+        return "1.0.0"
+    
+    def save_local_version(self, version):
+        version_file = os.path.join(self.config.base_dir, "version.json")
+        try:
+            with open(version_file, 'w') as f:
+                json.dump({"version": version, "updated": datetime.now().isoformat()}, f)
+        except:
+            pass
+    
+    def get_github_url(self):
+        user = self.config.data.get("github_user", "")
+        repo = self.config.data.get("github_repo", "dofus-bots")
+        if not user:
+            return None
+        return f"https://raw.githubusercontent.com/{user}/{repo}/main"
+    
+    def check_for_updates(self):
+        if not HAS_REQUESTS:
+            return None
+        
+        github_url = self.get_github_url()
+        if not github_url:
+            return None
+        
+        try:
+            self.log("🔍 Vérification...")
+            url = f"{github_url}/version.json"
+            response = requests.get(url, timeout=10)
+            
+            if response.status_code == 200:
+                remote_data = response.json()
+                remote_version = remote_data.get("version", "0.0.0")
+                
+                if self.compare_versions(remote_version, self.current_version) > 0:
+                    self.log(f"✨ v{remote_version} disponible!")
+                    return remote_data
+                else:
+                    self.log("✅ À jour")
+                    return None
+            else:
+                self.log("⚠️ GitHub non accessible")
+                return None
+        except Exception as e:
+            self.log(f"⚠️ Erreur: {e}")
+            return None
+    
+    def compare_versions(self, v1, v2):
+        try:
+            p1 = [int(x) for x in v1.split('.')]
+            p2 = [int(x) for x in v2.split('.')]
+            for i in range(max(len(p1), len(p2))):
+                a = p1[i] if i < len(p1) else 0
+                b = p2[i] if i < len(p2) else 0
+                if a > b: return 1
+                if a < b: return -1
+            return 0
+        except:
+            return 0
+    
+    def download_update(self, update_info):
+        if not HAS_REQUESTS:
+            return False
+        
+        github_url = self.get_github_url()
+        if not github_url:
+            return False
+        
+        try:
+            files = update_info.get("files", [])
+            delete_files = update_info.get("delete", [])
+            new_version = update_info.get("version", self.current_version)
+            
+            # 1. Supprimer les fichiers marqués pour suppression
+            for file_path in delete_files:
+                try:
+                    local_path = os.path.join(self.config.base_dir, file_path)
+                    if os.path.exists(local_path):
+                        os.remove(local_path)
+                        self.log(f"🗑️ Supprimé: {file_path}")
+                except Exception as e:
+                    self.log(f"⚠️ Impossible de supprimer: {file_path}")
+            
+            # 2. Télécharger les nouveaux fichiers
+            self.log(f"📥 Téléchargement...")
+            
+            for file_info in files:
+                file_path = file_info.get("path", "")
+                file_url = f"{github_url}/{file_path}"
+                
+                try:
+                    response = requests.get(file_url, timeout=30)
+                    if response.status_code == 200:
+                        local_path = os.path.join(self.config.base_dir, file_path)
+                        os.makedirs(os.path.dirname(local_path) if os.path.dirname(local_path) else ".", exist_ok=True)
+                        with open(local_path, 'wb') as f:
+                            f.write(response.content)
+                        self.log(f"✅ {file_path}")
+                except:
+                    self.log(f"❌ {file_path}")
+            
+            self.save_local_version(new_version)
+            self.current_version = new_version
+            self.log(f"✅ Mise à jour v{new_version} installée!")
+            return True
+        except Exception as e:
+            self.log(f"❌ Erreur: {e}")
+            return False
+
+
+# ============================================================
 #                    THÈME (ORIGINAL)
 # ============================================================
 THEME = {
@@ -172,6 +303,60 @@ class HubGUI:
     def __init__(self):
         self.config = Config()
         self.bots = BotScanner.scan_directory(self.config.base_dir)
+        self.updater = Updater(self.config, self.update_status)
+        self.update_available = None
+        
+        self.setup_window()
+        self.create_widgets()
+        
+        # Vérifier les mises à jour au démarrage
+        threading.Thread(target=self.check_updates_async, daemon=True).start()
+    
+    def update_status(self, msg):
+        try:
+            self.root.after(0, lambda: self.status_label.config(text=msg))
+        except:
+            pass
+    
+    def check_updates_async(self):
+        time.sleep(1)
+        update_info = self.updater.check_for_updates()
+        if update_info:
+            self.update_available = update_info
+            self.root.after(0, self.show_update_button)
+    
+    def show_update_button(self):
+        version = self.update_available.get("version", "?")
+        self.update_btn = tk.Button(self.header_right, text=f"⬆️ v{version}", 
+                                    font=('Segoe UI', 9, 'bold'),
+                                    bg=THEME['warning'], fg='black',
+                                    command=self.do_update, cursor='hand2')
+        self.update_btn.pack(side='left', padx=5)
+    
+    def do_update(self):
+        if not self.update_available:
+            return
+        
+        changelog = self.update_available.get("changelog", "Améliorations diverses")
+        version = self.update_available.get("version", "?")
+        
+        result = messagebox.askyesno("Mise à jour",
+            f"Nouvelle version disponible: v{version}\n\n"
+            f"Changelog:\n{changelog}\n\n"
+            "Mettre à jour maintenant?")
+        
+        if result:
+            self.update_btn.config(state='disabled', text="⏳...")
+            threading.Thread(target=self._update_thread, daemon=True).start()
+    
+    def _update_thread(self):
+        success = self.updater.download_update(self.update_available)
+        if success:
+            self.root.after(0, lambda: self.update_btn.pack_forget())
+            self.root.after(0, lambda: messagebox.showinfo("✅ Mise à jour",
+                "Mise à jour installée!\n\nRedémarre le Hub pour appliquer."))
+        else:
+            self.root.after(0, lambda: self.update_btn.config(state='normal', text="⬆️ Réessayer"))
         
         self.setup_window()
         self.create_widgets()
@@ -207,14 +392,14 @@ class HubGUI:
                 bg=THEME['bg2'], fg=THEME['text2']).pack(anchor='w')
         
         # Boutons droite
-        right = tk.Frame(header, bg=THEME['bg2'])
-        right.pack(side='right', padx=30)
+        self.header_right = tk.Frame(header, bg=THEME['bg2'])
+        self.header_right.pack(side='right', padx=30)
         
-        tk.Button(right, text="🔄 Actualiser", font=('Segoe UI', 9),
+        tk.Button(self.header_right, text="🔄 Actualiser", font=('Segoe UI', 9),
                  bg=THEME['bg3'], fg=THEME['text'],
                  command=self.refresh_bots).pack(side='left', padx=5)
         
-        tk.Button(right, text="⚙️ Paramètres", font=('Segoe UI', 9),
+        tk.Button(self.header_right, text="⚙️ Paramètres", font=('Segoe UI', 9),
                  bg=THEME['bg3'], fg=THEME['text'],
                  command=self.open_settings).pack(side='left', padx=5)
         
@@ -281,52 +466,39 @@ class HubGUI:
         card = tk.Frame(self.bots_frame, bg=THEME['card'], padx=20, pady=15)
         card.pack(fill='x', pady=8, padx=5)
         
-        # Effet hover
-        def on_enter(e):
-            card.config(bg=THEME['accent2'])
-            for child in card.winfo_children():
-                try:
-                    child.config(bg=THEME['accent2'])
-                    for sub in child.winfo_children():
-                        try:
-                            sub.config(bg=THEME['accent2'])
-                        except:
-                            pass
-                except:
-                    pass
-        
-        def on_leave(e):
-            card.config(bg=THEME['card'])
-            for child in card.winfo_children():
-                try:
-                    child.config(bg=THEME['card'])
-                    for sub in child.winfo_children():
-                        try:
-                            sub.config(bg=THEME['card'])
-                        except:
-                            pass
-                except:
-                    pass
-        
-        card.bind("<Enter>", on_enter)
-        card.bind("<Leave>", on_leave)
-        
         # Gauche: infos
         left = tk.Frame(card, bg=THEME['card'])
         left.pack(side='left', fill='both', expand=True)
         
-        tk.Label(left, text=bot['name'], font=('Segoe UI', 14, 'bold'),
-                bg=THEME['card'], fg=THEME['text']).pack(anchor='w')
+        name_label = tk.Label(left, text=bot['name'], font=('Segoe UI', 14, 'bold'),
+                             bg=THEME['card'], fg=THEME['text'])
+        name_label.pack(anchor='w')
         
-        tk.Label(left, text=bot['description'], font=('Segoe UI', 9),
-                bg=THEME['card'], fg=THEME['text2'], justify='left',
-                wraplength=400).pack(anchor='w', pady=3)
+        desc_label = tk.Label(left, text=bot['description'], font=('Segoe UI', 9),
+                             bg=THEME['card'], fg=THEME['text2'], justify='left',
+                             wraplength=400)
+        desc_label.pack(anchor='w', pady=3)
         
-        # Droite: bouton
-        tk.Button(card, text="▶️ LANCER", font=('Segoe UI', 11, 'bold'),
-                 bg=bot['color'], fg='white', width=12,
-                 command=lambda b=bot: self.launch_bot(b),
-                 cursor='hand2').pack(side='right', padx=10)
+        # Droite: bouton (ne pas inclure dans le hover)
+        btn = tk.Button(card, text="▶️ LANCER", font=('Segoe UI', 11, 'bold'),
+                       bg=bot['color'], fg='white', width=12,
+                       command=lambda b=bot: self.launch_bot(b),
+                       cursor='hand2')
+        btn.pack(side='right', padx=10)
+        
+        # Effet hover (seulement sur card, left, et labels)
+        hover_widgets = [card, left, name_label, desc_label]
+        
+        def on_enter(e):
+            for w in hover_widgets:
+                w.config(bg=THEME['accent2'])
+        
+        def on_leave(e):
+            for w in hover_widgets:
+                w.config(bg=THEME['card'])
+        
+        card.bind("<Enter>", on_enter)
+        card.bind("<Leave>", on_leave)
     
     def launch_bot(self, bot):
         """Lance un bot"""

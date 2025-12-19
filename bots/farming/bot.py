@@ -55,6 +55,36 @@ def send_discord_webhook(webhook_url, message, username="Dofus Bot"):
         print(f"❌ Erreur webhook Discord: {e}")
         return False
 
+
+def send_ntfy(topic, message):
+    """Envoie une notification Ntfy.sh (gratuit)"""
+    if not topic:
+        return False
+    try:
+        import urllib.request
+        url = f"https://ntfy.sh/{topic}"
+        data = message.encode('utf-8')
+        req = urllib.request.Request(url, data=data)
+        req.add_header('Title', 'Dofus Farm Bot')
+        req.add_header('Tags', 'seedling')
+        urllib.request.urlopen(req, timeout=5)
+        return True
+    except:
+        return False
+
+
+def send_notification(config_data, message):
+    """Envoie notification via Discord ET Ntfy"""
+    # Discord
+    webhook = config_data.get("discord_webhook", "")
+    if webhook:
+        send_discord_webhook(webhook, message)
+    
+    # Ntfy
+    topic = config_data.get("ntfy_topic", "")
+    if topic:
+        send_ntfy(topic, message)
+
 # ============================================================
 #                    CONFIGURATION
 # ============================================================
@@ -128,6 +158,8 @@ class Config:
                 # Webhook Discord et détection MP
                 if "discord_webhook" not in data:
                     data["discord_webhook"] = ""
+                if "ntfy_topic" not in data:
+                    data["ntfy_topic"] = ""
                 if "mp_detection" not in data:
                     data["mp_detection"] = True
                 
@@ -163,6 +195,7 @@ class Config:
                 "1920x1080": {"self": [1489, 773], "enemy": [1547, 759]}
             },
             "discord_webhook": "",
+            "ntfy_topic": "",
             "mp_detection": True,
             "hotkeys": {
                 "start": "F5",
@@ -537,25 +570,10 @@ class BotEngine:
         self.running = False
         self.paused = True
         
-        # Envoyer notification Discord
-        webhook_url = self.config.data.get("discord_webhook", "")
-        print(f"Webhook: {'Configuré' if webhook_url else 'NON CONFIGURÉ!'}")
-        
-        if webhook_url:
-            try:
-                message = f"🚨 **ALERTE MP DOFUS**\n\nUn message privé a été reçu!\nBot arrêté automatiquement.\n\n⏰ {datetime.now().strftime('%H:%M:%S')}"
-                success = send_discord_webhook(webhook_url, message)
-                if success:
-                    self.log("✅ Notification Discord envoyée!")
-                    print("✅ Discord notification sent!")
-                else:
-                    self.log("❌ Erreur envoi Discord")
-                    print("❌ Discord notification failed!")
-            except Exception as e:
-                print(f"❌ Erreur Discord: {e}")
-        else:
-            self.log("⚠️ Pas de webhook Discord configuré")
-            print("⚠️ Configure le webhook: 📱 Configurer Discord")
+        # Envoyer notification (Discord + Ntfy)
+        message = "ALERTE MP DOFUS - Un message prive a ete recu! Bot arrete."
+        send_notification(self.config.data, message)
+        self.log("📱 Notification envoyee!")
     
     def find_timeline_portraits(self, frame):
         """Retourne les positions fixes des cercles selon la résolution"""
@@ -949,8 +967,9 @@ class BotGUI:
         self.mp_color_label.pack(pady=2)
         
         # Indicateur webhook
-        webhook_status = "✅ Configuré" if self.config.data.get("discord_webhook") else "❌ Non configuré"
-        self.webhook_label = tk.Label(left, text=f"Webhook: {webhook_status}", font=('Segoe UI', 9),
+        has_notif = self.config.data.get("discord_webhook") or self.config.data.get("ntfy_topic")
+        webhook_status = "✅ Configure" if has_notif else "❌ Non configure"
+        self.webhook_label = tk.Label(left, text=f"Notif: {webhook_status}", font=('Segoe UI', 9),
                                       bg=self.colors['bg2'], fg=self.colors['text2'])
         self.webhook_label.pack(pady=2)
         
@@ -1508,71 +1527,97 @@ class BotGUI:
                  command=save_hotkeys).pack(side='right', padx=5)
     
     def open_webhook_config(self):
-        """Ouvre la fenêtre de configuration du webhook Discord"""
+        """Configure les notifications (Discord + Ntfy)"""
         dialog = tk.Toplevel(self.root)
-        dialog.title("📱 Configuration Discord")
-        dialog.geometry("500x300")
+        dialog.title("📱 Configuration Notifications")
+        dialog.geometry("550x420")
         dialog.configure(bg=self.colors['bg'])
         dialog.transient(self.root)
         dialog.grab_set()
         
-        tk.Label(dialog, text="🔔 Webhook Discord", font=('Segoe UI', 14, 'bold'),
-                bg=self.colors['bg'], fg=self.colors['accent']).pack(pady=15)
+        tk.Label(dialog, text="📱 Notifications Push", font=('Segoe UI', 14, 'bold'),
+                bg=self.colors['bg'], fg=self.colors['accent']).pack(pady=10)
         
-        tk.Label(dialog, text="Colle l'URL du webhook Discord pour recevoir les alertes MP:",
-                font=('Segoe UI', 10), bg=self.colors['bg'], fg=self.colors['text2']).pack(pady=5)
+        # === NTFY ===
+        ntfy_frame = tk.LabelFrame(dialog, text="📲 Ntfy.sh (gratuit & recommande)", 
+                                   font=('Segoe UI', 10, 'bold'),
+                                   bg=self.colors['bg2'], fg=self.colors['text'], padx=15, pady=10)
+        ntfy_frame.pack(fill='x', padx=20, pady=10)
         
-        # URL entry
-        url_frame = tk.Frame(dialog, bg=self.colors['bg2'], padx=20, pady=15)
-        url_frame.pack(fill='x', padx=20, pady=10)
+        tk.Label(ntfy_frame, text="Topic:", bg=self.colors['bg2'], fg=self.colors['text']).pack(anchor='w')
+        ntfy_entry = tk.Entry(ntfy_frame, width=40, bg=self.colors['bg3'], fg=self.colors['text'],
+                             insertbackground=self.colors['text'])
+        ntfy_entry.insert(0, self.config.data.get("ntfy_topic", ""))
+        ntfy_entry.pack(fill='x', pady=5)
         
-        tk.Label(url_frame, text="URL Webhook:", font=('Segoe UI', 10),
-                bg=self.colors['bg2'], fg=self.colors['text']).pack(anchor='w')
+        tk.Label(ntfy_frame, text="Installe l'app 'ntfy' sur ton tel, abonne-toi au meme topic",
+                font=('Segoe UI', 8), bg=self.colors['bg2'], fg=self.colors['text2']).pack(anchor='w')
         
-        url_entry = tk.Entry(url_frame, width=60, bg=self.colors['bg3'], fg=self.colors['text'],
+        # === DISCORD ===
+        discord_frame = tk.LabelFrame(dialog, text="🎮 Discord Webhook", 
+                                      font=('Segoe UI', 10, 'bold'),
+                                      bg=self.colors['bg2'], fg=self.colors['text'], padx=15, pady=10)
+        discord_frame.pack(fill='x', padx=20, pady=10)
+        
+        tk.Label(discord_frame, text="URL Webhook:", bg=self.colors['bg2'], fg=self.colors['text']).pack(anchor='w')
+        url_entry = tk.Entry(discord_frame, width=50, bg=self.colors['bg3'], fg=self.colors['text'],
                             insertbackground=self.colors['text'])
         url_entry.insert(0, self.config.data.get("discord_webhook", ""))
         url_entry.pack(fill='x', pady=5)
         
-        # Instructions
-        tk.Label(dialog, text="💡 Comment obtenir un webhook:\n1. Discord → Paramètres du serveur → Intégrations\n2. Créer un webhook → Copier l'URL",
-                font=('Segoe UI', 9), bg=self.colors['bg'], fg=self.colors['text2'], justify='left').pack(pady=10)
+        tk.Label(discord_frame, text="Serveur Discord > Salon > Modifier > Integrations > Webhooks",
+                font=('Segoe UI', 8), bg=self.colors['bg2'], fg=self.colors['text2']).pack(anchor='w')
         
-        def test_webhook():
+        def test_ntfy():
+            topic = ntfy_entry.get().strip()
+            if topic:
+                success = send_ntfy(topic, "Test Dofus Farm Bot - Ca marche!")
+                if success:
+                    messagebox.showinfo("Succes", "Notification envoyee!")
+                else:
+                    messagebox.showerror("Erreur", "Echec. Verifie le topic.")
+            else:
+                messagebox.showwarning("Attention", "Entre un topic!")
+        
+        def test_discord():
             url = url_entry.get().strip()
             if url:
-                success = send_discord_webhook(url, "🧪 **Test Dofus Bot**\n\nLe webhook fonctionne correctement!")
+                success = send_discord_webhook(url, "🧪 **Test Dofus Bot**\n\nLe webhook fonctionne!")
                 if success:
-                    messagebox.showinfo("Succès", "✅ Message de test envoyé!")
+                    messagebox.showinfo("Succes", "Message envoye!")
                 else:
-                    messagebox.showerror("Erreur", "❌ Échec de l'envoi. Vérifie l'URL.")
+                    messagebox.showerror("Erreur", "Echec. Verifie l'URL.")
             else:
-                messagebox.showwarning("Attention", "Entre une URL de webhook!")
+                messagebox.showwarning("Attention", "Entre une URL!")
         
-        def save_webhook():
-            url = url_entry.get().strip()
-            self.config.data["discord_webhook"] = url
+        def save_config():
+            self.config.data["ntfy_topic"] = ntfy_entry.get().strip()
+            self.config.data["discord_webhook"] = url_entry.get().strip()
             self.config.save()
             
-            # Mettre à jour l'indicateur
-            status = "✅ Configuré" if url else "❌ Non configuré"
+            has_notif = self.config.data["ntfy_topic"] or self.config.data["discord_webhook"]
+            status = "✅ Configure" if has_notif else "❌ Non configure"
             self.webhook_label.config(text=f"Webhook: {status}")
             
-            self.log("✅ Webhook Discord sauvegardé!")
-            messagebox.showinfo("OK", "Configuration sauvegardée!")
+            self.log("✅ Notifications sauvegardees!")
+            messagebox.showinfo("OK", "Configuration sauvegardee!")
             dialog.destroy()
         
         # Boutons
         btn_frame = tk.Frame(dialog, bg=self.colors['bg'])
         btn_frame.pack(fill='x', padx=20, pady=15)
         
-        tk.Button(btn_frame, text="🧪 Tester", font=('Segoe UI', 10),
+        tk.Button(btn_frame, text="🧪 Test Ntfy", font=('Segoe UI', 10),
+                 bg='#ff9f1c', fg='white', width=12,
+                 command=test_ntfy).pack(side='left', padx=5)
+        
+        tk.Button(btn_frame, text="🧪 Test Discord", font=('Segoe UI', 10),
                  bg='#5865F2', fg='white', width=12,
-                 command=test_webhook).pack(side='left', padx=5)
+                 command=test_discord).pack(side='left', padx=5)
         
         tk.Button(btn_frame, text="💾 Sauvegarder", font=('Segoe UI', 11, 'bold'),
                  bg=self.colors['success'], fg='white', width=15,
-                 command=save_webhook).pack(side='right', padx=5)
+                 command=save_config).pack(side='right', padx=5)
     
     def update_spells_preview(self):
         """Met à jour l'aperçu des sorts configurés"""

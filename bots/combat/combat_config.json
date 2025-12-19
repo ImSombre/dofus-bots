@@ -1,0 +1,50 @@
+{
+  "recorded_actions": [
+    {
+      "type": "click",
+      "x": 1336,
+      "y": 410,
+      "time": 0.2651693820953369
+    },
+    {
+      "type": "click",
+      "x": 1133,
+      "y": 548,
+      "time": 0.8703098297119141
+    },
+    {
+      "type": "click",
+      "x": 1331,
+      "y": 580,
+      "time": 1.418461561203003
+    },
+    {
+      "type": "click",
+      "x": 1575,
+      "y": 618,
+      "time": 2.2851550579071045
+    },
+    {
+      "type": "key",
+      "key": "f8",
+      "time": 3.150726556777954
+    }
+  ],
+  "combat": {
+    "search_delay": 2.0,
+    "action_delay": 0.3
+  },
+  "mob_templates": [],
+  "hotkeys": {
+    "start": "F5",
+    "pause": "F6",
+    "stop": "F7",
+    "record": "F8"
+  },
+  "discord_webhook": "",
+  "ntfy_topic": "dofus-bot-ImSombre",
+  "mp_detection": true,
+  "mp_ocr": true,
+  "ocr_lang": "fra+eng",
+  "tesseract_cmd": ""
+}

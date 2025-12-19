@@ -1,0 +1,11 @@
+{
+  "discord_webhook": "",
+  "ntfy_topic": "dofus-bot-ImSombre",
+  "mp_ocr": true,
+  "tesseract_cmd": "C:\\Program Files\\Tesseract-OCR\\tesseract.exe",
+  "tesseract_lang": "fra",
+  "screenshot_crop": "chat",
+  "jpeg_quality": 70,
+  "resize_ratio": 0.85,
+  "mp_ocr_mode": "mp_only"
+}

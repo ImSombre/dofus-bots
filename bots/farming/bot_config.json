@@ -1,0 +1,86 @@
+{
+  "match_threshold": 0.7,
+  "harvest_delay": 1.5,
+  "move_delay": 2.0,
+  "scan_delay": 0.3,
+  "resources": {
+    "fer": {
+      "enabled": true,
+      "count": 0
+    }
+  },
+  "combat": {
+    "enabled": true,
+    "spells": [
+      {
+        "enabled": true,
+        "name": "Sort 1",
+        "key": "&",
+        "target": "self"
+      },
+      {
+        "enabled": true,
+        "name": "Sort 2",
+        "key": "é",
+        "target": "self"
+      },
+      {
+        "enabled": true,
+        "name": "Sort 3",
+        "key": "\"",
+        "target": "self"
+      },
+      {
+        "enabled": false,
+        "name": "Sort 4",
+        "key": "4",
+        "target": "enemy"
+      },
+      {
+        "enabled": false,
+        "name": "Sort 5",
+        "key": "5",
+        "target": "enemy"
+      },
+      {
+        "enabled": false,
+        "name": "Sort 6",
+        "key": "6",
+        "target": "enemy"
+      }
+    ],
+    "end_turn_key": "F1",
+    "spell_delay": 1.0,
+    "turn_delay": 5.0
+  },
+  "combat_positions": {
+    "2560x1440": {
+      "self": [
+        2006,
+        1032
+      ],
+      "enemy": [
+        2092,
+        1028
+      ]
+    },
+    "1920x1080": {
+      "self": [
+        1489,
+        773
+      ],
+      "enemy": [
+        1547,
+        759
+      ]
+    }
+  },
+  "discord_webhook": "",
+  "mp_detection": true,
+  "hotkeys": {
+    "start": "F5",
+    "pause": "F6",
+    "stop": "F7"
+  },
+  "ntfy_topic": "dofus-bot-ImSombre"
+}

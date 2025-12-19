@@ -1,0 +1,27 @@
+{
+  "notes": "",
+  "chat_msgs": [
+    "test"
+  ],
+  "chat_interval": 3,
+  "chat_profiles": {
+    "Défaut": {
+      "msgs": [
+        "Up métier!"
+      ],
+      "interval": 1,
+      "batch": 10,
+      "active": false
+    },
+    "test": {
+      "msgs": [
+        "test"
+      ],
+      "interval": 1,
+      "batch": 10,
+      "active": true
+    }
+  },
+  "ntfy_topic": "dofus-bot-ImSombre",
+  "discord_webhook": ""
+}

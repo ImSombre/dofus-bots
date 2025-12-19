@@ -1,0 +1,10 @@
+{
+  "notes": "",
+  "auto_chat_messages": [
+    "Up métier!",
+    "/away AFK"
+  ],
+  "auto_chat_interval": 300,
+  "auto_clicker_interval": 1000,
+  "reconnect_check_interval": 5
+}
