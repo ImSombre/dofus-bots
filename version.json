@@ -1,9 +1,11 @@
 {
-    "version": "1.0.0",
-    "changelog": "Version initiale du Hub",
+    "version": "1.1.0",
+    "changelog": "Ajout du Travel Bot - Déplacement automatique avec IA",
     "files": [
         {"path": "hub.py"},
+        {"path": "version.json"},
         {"path": "bots/farming/bot.py"},
-        {"path": "bots/combat/bot_combat.py"}
+        {"path": "bots/combat/bot_combat.py"},
+        {"path": "bots/travel/bot_travel.py"}
     ]
 }

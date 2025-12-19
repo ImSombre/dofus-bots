@@ -109,6 +109,7 @@ class PathManager:
         os.makedirs(self.bots_dir, exist_ok=True)
         os.makedirs(os.path.join(self.bots_dir, "farming"), exist_ok=True)
         os.makedirs(os.path.join(self.bots_dir, "combat"), exist_ok=True)
+        os.makedirs(os.path.join(self.bots_dir, "travel"), exist_ok=True)
 
 
 # ============================================================
@@ -269,6 +270,15 @@ BOTS = [
         "script": "bots/combat/bot_combat.py",
         "color": "#e94560",
         "icon": "🗡️"
+    },
+    {
+        "id": "travel",
+        "name": "🗺️ Travel Bot",
+        "description": "Déplacement automatique intelligent\nPathfinding A* • Zaaps • Chemin optimal",
+        "version": "1.0",
+        "script": "bots/travel/bot_travel.py",
+        "color": "#4cc9f0",
+        "icon": "🗺️"
     }
 ]
 
