@@ -1,5 +1,5 @@
 {
-    "version": "1.3.3",
+    "version": "2.1.0",
     "changelog": "Hub: Redémarrage auto après MAJ | Travel Bot v3.3: Sans OCR, entrée manuelle facile",
     "files": [
         {"path": "hub.py"},
@@ -8,6 +8,6 @@
         {"path": "requirements.txt"},
         {"path": "bots/farming/bot.py"},
         {"path": "bots/combat/bot_combat.py"},
-        {"path": "bots/travel/bot_travel.py"}
+        {"path": "bot_anti_afk.py"}
     ]
 }
