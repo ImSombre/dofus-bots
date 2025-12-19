@@ -1,7 +1,7 @@
 """
-🗺️ Dofus Retro Travel Bot v3.2
+🗺️ Dofus Retro Travel Bot v3.3
 Bot de déplacement automatique
-- OCR pour lire les coordonnées (optionnel)
+- Entrée manuelle facile
 - Zaaps automatiques
 - Pathfinding A*
 """
@@ -13,50 +13,15 @@ import os
 import time
 import threading
 import heapq
-import re
-import webbrowser
 
 try:
     import pyautogui
     import keyboard
     from PIL import ImageGrab, Image, ImageTk
-    import numpy as np
-    import cv2
     HAS_DEPS = True
 except ImportError as e:
     print(f"Import error: {e}")
     HAS_DEPS = False
-
-# OCR
-HAS_OCR = False
-TESSERACT_PATH = None
-
-try:
-    import pytesseract
-    # Chercher Tesseract sur Windows
-    possible_paths = [
-        r"C:\Program Files\Tesseract-OCR\tesseract.exe",
-        r"C:\Program Files (x86)\Tesseract-OCR\tesseract.exe",
-        r"C:\Users\{}\AppData\Local\Tesseract-OCR\tesseract.exe".format(os.getenv('USERNAME', '')),
-    ]
-    
-    for path in possible_paths:
-        if os.path.exists(path):
-            pytesseract.pytesseract.tesseract_cmd = path
-            TESSERACT_PATH = path
-            HAS_OCR = True
-            break
-    
-    if not TESSERACT_PATH:
-        # Essayer quand même (peut être dans le PATH)
-        try:
-            pytesseract.get_tesseract_version()
-            HAS_OCR = True
-        except:
-            pass
-            
-except ImportError:
-    pass
 
 
 # ============================================================
@@ -84,7 +49,6 @@ class Config:
     
     def default_config(self):
         return {
-            "coords_region": {"x": 232, "y": 78, "width": 160, "height": 25},
             "click_positions": {
                 "right": {"x": 1250, "y": 400},
                 "left": {"x": 240, "y": 400},
@@ -95,7 +59,8 @@ class Config:
             "move_delay": 1.5,
             "zaap_delay": 2.5,
             "known_zaaps": ["Astrub", "Amakna Village"],
-            "use_zaaps": True
+            "use_zaaps": True,
+            "last_position": {"x": 4, "y": -19}
         }
     
     def save(self):
@@ -113,16 +78,26 @@ class Config:
 
 class WorldMap:
     ZAAPS = {
-        "Astrub": (4, -19),
-        "Astrub Centre": (5, -18),
-        "Amakna Village": (0, 0),
-        "Amakna Château": (3, -5),
-        "Port Madrestam": (7, -4),
-        "Coin des Bouftous": (5, 7),
-        "Bord de Forêt": (-1, 13),
-        "Bonta": (-26, -36),
-        "Brakmar": (-26, 35),
-        "Sufokia": (13, 26),
+        "Astrub (4, -19)": (4, -19),
+        "Astrub Centre (5, -18)": (5, -18),
+        "Amakna Village (0, 0)": (0, 0),
+        "Amakna Château (3, -5)": (3, -5),
+        "Port Madrestam (7, -4)": (7, -4),
+        "Coin des Bouftous (5, 7)": (5, 7),
+        "Bord de Forêt (-1, 13)": (-1, 13),
+        "Bonta (-26, -36)": (-26, -36),
+        "Brakmar (-26, 35)": (-26, 35),
+        "Sufokia (13, 26)": (13, 26),
+    }
+    
+    # Lieux utiles (non-zaap)
+    PLACES = {
+        "Astrub - Banque": (4, -18),
+        "Astrub - Zaap": (4, -19),
+        "Amakna - Zaap": (0, 0),
+        "Amakna - Banque": (4, -3),
+        "Champs de Blé": (0, -1),
+        "Mine Astrub": (1, -20),
     }
     
     BLOCKED_MAPS = set()
@@ -145,81 +120,31 @@ class WorldMap:
         return cls.ZAAPS.get(name)
     
     @classmethod
+    def get_places_list(cls):
+        return list(cls.PLACES.keys())
+    
+    @classmethod
+    def get_place_pos(cls, name):
+        return cls.PLACES.get(name)
+    
+    @classmethod
     def find_nearest_zaap(cls, x, y, known):
         nearest, min_dist = None, float('inf')
         for name in known:
-            if name in cls.ZAAPS:
-                zx, zy = cls.ZAAPS[name]
-                dist = abs(x-zx) + abs(y-zy)
-                if dist < min_dist:
-                    min_dist, nearest = dist, (name, zx, zy)
+            for zaap_name, pos in cls.ZAAPS.items():
+                if name in zaap_name:
+                    dist = abs(x-pos[0]) + abs(y-pos[1])
+                    if dist < min_dist:
+                        min_dist, nearest = dist, (zaap_name, pos[0], pos[1])
         return nearest, min_dist
     
     @classmethod
     def is_on_zaap(cls, x, y, known):
         for name in known:
-            if name in cls.ZAAPS and cls.ZAAPS[name] == (x, y):
-                return name
+            for zaap_name, pos in cls.ZAAPS.items():
+                if name in zaap_name and pos == (x, y):
+                    return zaap_name
         return None
-
-
-# ============================================================
-#                    OCR
-# ============================================================
-
-class PositionDetector:
-    def __init__(self, config):
-        self.config = config
-        self.last_capture = None
-    
-    def capture_region(self):
-        r = self.config.data.get("coords_region", {})
-        x, y = r.get("x", 232), r.get("y", 78)
-        w, h = r.get("width", 160), r.get("height", 25)
-        self.last_capture = ImageGrab.grab(bbox=(x, y, x+w, y+h))
-        return self.last_capture
-    
-    def detect_position(self):
-        if not HAS_OCR:
-            return None
-        
-        try:
-            img = self.capture_region()
-            img_np = np.array(img)
-            
-            # Prétraitement
-            gray = cv2.cvtColor(img_np, cv2.COLOR_RGB2GRAY)
-            gray = cv2.resize(gray, None, fx=3, fy=3, interpolation=cv2.INTER_CUBIC)
-            gray = cv2.convertScaleAbs(gray, alpha=2.0, beta=0)
-            _, thresh = cv2.threshold(gray, 200, 255, cv2.THRESH_BINARY)
-            
-            # OCR
-            text = pytesseract.image_to_string(thresh, 
-                config='--oem 3 --psm 7 -c tessedit_char_whitelist=0123456789-,.')
-            text = text.strip().replace(' ', '').replace('.', ',')
-            
-            # Parser
-            match = re.search(r'(-?\d+)[,;:\s]+(-?\d+)', text)
-            if match:
-                return (int(match.group(1)), int(match.group(2)))
-            
-            numbers = re.findall(r'-?\d+', text)
-            if len(numbers) >= 2:
-                return (int(numbers[0]), int(numbers[1]))
-                
-        except Exception as e:
-            print(f"OCR Error: {e}")
-        
-        return None
-    
-    def get_capture_tk(self, max_size=300):
-        if not self.last_capture:
-            return None
-        img = self.last_capture.copy()
-        w, h = img.size
-        scale = min(max_size/w, max_size/h, 3)
-        img = img.resize((int(w*scale), int(h*scale)), Image.NEAREST)
-        return ImageTk.PhotoImage(img)
 
 
 # ============================================================
@@ -263,17 +188,16 @@ class Pathfinder:
             if self.use_zaaps and self.known_zaaps:
                 zaap = WorldMap.is_on_zaap(current[0], current[1], self.known_zaaps)
                 if zaap:
-                    for dest in self.known_zaaps:
-                        if dest != zaap and dest in WorldMap.ZAAPS:
-                            pos = WorldMap.ZAAPS[dest]
-                            if pos in closed:
+                    for dest_name, dest_pos in WorldMap.ZAAPS.items():
+                        if any(k in dest_name for k in self.known_zaaps) and dest_name != zaap:
+                            if dest_pos in closed:
                                 continue
                             g = g_scores.get(current, float('inf')) + 2
-                            if g < g_scores.get(pos, float('inf')):
-                                g_scores[pos] = g
-                                f = g + abs(goal[0]-pos[0]) + abs(goal[1]-pos[1])
+                            if g < g_scores.get(dest_pos, float('inf')):
+                                g_scores[dest_pos] = g
+                                f = g + abs(goal[0]-dest_pos[0]) + abs(goal[1]-dest_pos[1])
                                 counter += 1
-                                heapq.heappush(open_set, (f, counter, pos, path + [(f"zaap:{dest}", pos)]))
+                                heapq.heappush(open_set, (f, counter, dest_pos, path + [(f"zaap:{dest_name}", dest_pos)]))
         
         return None
     
@@ -300,9 +224,10 @@ class Pathfinder:
 # ============================================================
 
 class TravelBot:
-    def __init__(self, config, log_callback=None):
+    def __init__(self, config, log_callback=None, pos_callback=None):
         self.config = config
         self.log = log_callback or print
+        self.on_position_change = pos_callback
         
         self.running = False
         self.paused = False
@@ -313,28 +238,27 @@ class TravelBot:
         self.current_path = []
         self.path_index = 0
         
-        self.detector = PositionDetector(config)
         self.pathfinder = Pathfinder(
             use_zaaps=config.data.get("use_zaaps", True),
             known_zaaps=config.data.get("known_zaaps", [])
         )
-    
-    def detect_position(self):
-        pos = self.detector.detect_position()
-        if pos:
-            self.current_pos = pos
-            self.log(f"📍 Position: [{pos[0]}, {pos[1]}]")
-        else:
-            self.log("⚠️ OCR échoué")
-        return pos
+        
+        # Charger dernière position
+        last = config.data.get("last_position", {})
+        if last:
+            self.current_pos = (last.get("x", 0), last.get("y", 0))
     
     def set_position(self, x, y):
         self.current_pos = (x, y)
+        self.config.data["last_position"] = {"x": x, "y": y}
+        self.config.save()
         self.log(f"📍 Position: [{x}, {y}]")
+        if self.on_position_change:
+            self.on_position_change(x, y)
     
     def calculate_path(self, tx, ty):
         if not self.current_pos:
-            self.log("❌ Position inconnue!")
+            self.log("❌ Entre ta position d'abord!")
             return None
         
         self.target_pos = (tx, ty)
@@ -349,7 +273,10 @@ class TravelBot:
             self.path_index = 0
             self.log(f"✅ {len(path)} étapes")
             return path
-        self.log("❌ Pas de chemin!")
+        elif self.current_pos == self.target_pos:
+            self.log("✅ Tu es déjà à destination!")
+            return []
+        self.log("❌ Pas de chemin trouvé!")
         return None
     
     def click_direction(self, d):
@@ -360,29 +287,39 @@ class TravelBot:
         return False
     
     def use_zaap(self, dest):
-        self.log(f"🌀 Zaap → {dest}")
+        self.log(f"🌀 Zaap → {dest.split('(')[0].strip()}")
         zaap = self.config.data.get("zaap_click", {"x": 600, "y": 400})
         pyautogui.click(zaap["x"], zaap["y"])
         time.sleep(1)
         
-        menu = {"Astrub": (500, 280), "Amakna Village": (500, 300), "Bonta": (500, 320)}
-        if dest in menu:
-            pyautogui.doubleClick(*menu[dest])
+        # Menu zaap - positions approximatives
+        menu = {
+            "Astrub": (500, 280),
+            "Amakna Village": (500, 300),
+            "Amakna Château": (500, 320),
+            "Bonta": (500, 340),
+            "Brakmar": (500, 360),
+        }
+        
+        for name, pos in menu.items():
+            if name in dest:
+                pyautogui.doubleClick(*pos)
+                break
         
         time.sleep(self.config.data.get("zaap_delay", 2.5))
         return True
     
     def execute_move(self, move, target):
         if str(move).startswith("zaap:"):
-            self.use_zaap(move.split(":")[1])
-            self.current_pos = target
+            self.use_zaap(move.split(":", 1)[1])
+            self.set_position(target[0], target[1])
             return True
         else:
             icons = {"right": "→", "left": "←", "up": "↑", "down": "↓"}
             self.log(f"🚶 {icons.get(move, '?')} [{target[0]},{target[1]}]")
             if self.click_direction(move):
                 time.sleep(self.config.data.get("move_delay", 1.5))
-                self.current_pos = target
+                self.set_position(target[0], target[1])
                 return True
             return False
     
@@ -398,7 +335,7 @@ class TravelBot:
     
     def _loop(self):
         total = len(self.current_path)
-        self.log(f"🚀 Go! {total} étapes")
+        self.log(f"🚀 Départ! {total} étapes")
         
         while self.running and self.path_index < total:
             if self.stop_requested:
@@ -417,7 +354,7 @@ class TravelBot:
                 time.sleep(1)
         
         if self.path_index >= total and not self.stop_requested:
-            self.log(f"🎉 Arrivé!")
+            self.log(f"🎉 Arrivé à destination!")
         self.running = False
     
     def pause(self):
@@ -427,7 +364,7 @@ class TravelBot:
     def stop(self):
         self.stop_requested = True
         self.running = False
-        self.log("⏹️ Stop")
+        self.log("⏹️ Arrêté")
 
 
 # ============================================================
@@ -445,38 +382,61 @@ THEME = {
 class TravelBotGUI:
     def __init__(self):
         self.config = Config()
-        self.bot = TravelBot(self.config, self.log)
-        self.preview_image = None
+        self.bot = TravelBot(self.config, self.log, self.update_position_display)
         
         self.setup_window()
         self.create_widgets()
         self.setup_hotkeys()
+        
+        # Afficher dernière position
+        if self.bot.current_pos:
+            self.current_x.delete(0, 'end')
+            self.current_x.insert(0, str(self.bot.current_pos[0]))
+            self.current_y.delete(0, 'end')
+            self.current_y.insert(0, str(self.bot.current_pos[1]))
     
     def run(self):
         self.root.mainloop()
     
     def setup_window(self):
         self.root = tk.Tk()
-        self.root.title("🗺️ Dofus Travel Bot v3.2")
-        self.root.geometry("800x950")
+        self.root.title("🗺️ Dofus Travel Bot v3.3")
+        self.root.geometry("700x850")
         self.root.configure(bg=THEME['bg'])
+        self.root.resizable(True, True)
     
     def setup_hotkeys(self):
         try:
             keyboard.add_hotkey('F5', self.start_travel)
             keyboard.add_hotkey('F6', self.pause_travel)
             keyboard.add_hotkey('F7', self.stop_travel)
-            keyboard.add_hotkey('F8', self.detect_position)
         except:
             pass
     
+    def update_position_display(self, x, y):
+        """Met à jour l'affichage de la position"""
+        self.root.after(0, lambda: self._update_pos(x, y))
+    
+    def _update_pos(self, x, y):
+        self.current_x.delete(0, 'end')
+        self.current_x.insert(0, str(x))
+        self.current_y.delete(0, 'end')
+        self.current_y.insert(0, str(y))
+        self.pos_label.config(text=f"Position actuelle: [{x}, {y}]")
+    
     def create_widgets(self):
         # Header
-        header = tk.Frame(self.root, bg=THEME['bg2'], height=60)
+        header = tk.Frame(self.root, bg=THEME['accent'], height=80)
         header.pack(fill='x')
         header.pack_propagate(False)
-        tk.Label(header, text="🗺️ DOFUS TRAVEL BOT v3.2", font=('Segoe UI', 18, 'bold'),
-                bg=THEME['bg2'], fg=THEME['text']).pack(pady=15)
+        
+        tk.Label(header, text="🗺️ DOFUS TRAVEL BOT", font=('Segoe UI', 20, 'bold'),
+                bg=THEME['accent'], fg='white').pack(pady=10)
+        
+        self.pos_label = tk.Label(header, text="Position actuelle: [?, ?]", 
+                                  font=('Segoe UI', 11),
+                                  bg=THEME['accent'], fg='white')
+        self.pos_label.pack()
         
         # Tabs
         notebook = ttk.Notebook(self.root)
@@ -486,104 +446,139 @@ class TravelBotGUI:
         self.create_calibration_tab(notebook)
         self.create_zaaps_tab(notebook)
         
-        # Status
-        tk.Label(self.root, text="F5=Go • F6=Pause • F7=Stop • F8=Détecter",
-                font=('Segoe UI', 9), bg=THEME['bg2'], fg=THEME['text2']).pack(fill='x', pady=3)
+        # Status bar
+        status = tk.Frame(self.root, bg=THEME['bg2'], height=30)
+        status.pack(fill='x', side='bottom')
+        tk.Label(status, text="F5 = Démarrer • F6 = Pause • F7 = Stop",
+                font=('Segoe UI', 9), bg=THEME['bg2'], fg=THEME['text2']).pack(pady=5)
     
     def create_navigation_tab(self, notebook):
         tab = tk.Frame(notebook, bg=THEME['bg'])
         notebook.add(tab, text="🗺️ Navigation")
         
-        # Position
-        frame = tk.LabelFrame(tab, text="📍 Position Actuelle", font=('Segoe UI', 10, 'bold'),
+        # ═══════════════════════════════════════════════
+        # POSITION ACTUELLE
+        # ═══════════════════════════════════════════════
+        frame = tk.LabelFrame(tab, text="📍 TA POSITION (regarde en haut à gauche dans Dofus)", 
+                              font=('Segoe UI', 10, 'bold'),
                               bg=THEME['bg2'], fg=THEME['text'], padx=15, pady=10)
         frame.pack(fill='x', padx=10, pady=5)
         
-        row = tk.Frame(frame, bg=THEME['bg2'])
-        row.pack(fill='x')
+        # Aide
+        tk.Label(frame, text="💡 Dans Dofus, ta position est affichée: \"Coordonnées : X, Y\"",
+                font=('Segoe UI', 9), bg=THEME['bg2'], fg=THEME['text2']).pack(anchor='w')
         
-        tk.Label(row, text="X:", bg=THEME['bg2'], fg=THEME['text']).pack(side='left')
-        self.current_x = tk.Entry(row, width=7, font=('Segoe UI', 12), bg=THEME['bg3'], fg=THEME['text'])
+        row = tk.Frame(frame, bg=THEME['bg2'])
+        row.pack(fill='x', pady=10)
+        
+        tk.Label(row, text="X:", font=('Segoe UI', 12, 'bold'), 
+                bg=THEME['bg2'], fg=THEME['text']).pack(side='left')
+        self.current_x = tk.Entry(row, width=8, font=('Segoe UI', 14), 
+                                  bg=THEME['bg3'], fg=THEME['text'],
+                                  justify='center')
         self.current_x.pack(side='left', padx=5)
         
-        tk.Label(row, text="Y:", bg=THEME['bg2'], fg=THEME['text']).pack(side='left', padx=(15,0))
-        self.current_y = tk.Entry(row, width=7, font=('Segoe UI', 12), bg=THEME['bg3'], fg=THEME['text'])
+        tk.Label(row, text="Y:", font=('Segoe UI', 12, 'bold'),
+                bg=THEME['bg2'], fg=THEME['text']).pack(side='left', padx=(20, 0))
+        self.current_y = tk.Entry(row, width=8, font=('Segoe UI', 14),
+                                  bg=THEME['bg3'], fg=THEME['text'],
+                                  justify='center')
         self.current_y.pack(side='left', padx=5)
         
-        tk.Button(row, text="📍 Définir", bg=THEME['accent2'], fg='white',
-                 command=self.set_position).pack(side='left', padx=10)
+        tk.Button(row, text="✅ VALIDER", font=('Segoe UI', 10, 'bold'),
+                 bg=THEME['success'], fg='white', padx=15,
+                 command=self.set_position).pack(side='left', padx=20)
         
-        if HAS_OCR:
-            tk.Button(row, text="🔍 Détecter (F8)", bg=THEME['success'], fg='white',
-                     command=self.detect_position).pack(side='left')
-        
-        # Destination
-        frame = tk.LabelFrame(tab, text="🎯 Destination", font=('Segoe UI', 10, 'bold'),
+        # ═══════════════════════════════════════════════
+        # DESTINATION
+        # ═══════════════════════════════════════════════
+        frame = tk.LabelFrame(tab, text="🎯 DESTINATION", font=('Segoe UI', 10, 'bold'),
                               bg=THEME['bg2'], fg=THEME['text'], padx=15, pady=10)
         frame.pack(fill='x', padx=10, pady=5)
         
+        # Coordonnées manuelles
         row = tk.Frame(frame, bg=THEME['bg2'])
-        row.pack(fill='x')
+        row.pack(fill='x', pady=5)
         
-        tk.Label(row, text="X:", bg=THEME['bg2'], fg=THEME['text']).pack(side='left')
-        self.dest_x = tk.Entry(row, width=7, font=('Segoe UI', 12), bg=THEME['bg3'], fg=THEME['text'])
+        tk.Label(row, text="X:", font=('Segoe UI', 12, 'bold'),
+                bg=THEME['bg2'], fg=THEME['text']).pack(side='left')
+        self.dest_x = tk.Entry(row, width=8, font=('Segoe UI', 14),
+                               bg=THEME['bg3'], fg=THEME['text'],
+                               justify='center')
         self.dest_x.pack(side='left', padx=5)
         
-        tk.Label(row, text="Y:", bg=THEME['bg2'], fg=THEME['text']).pack(side='left', padx=(15,0))
-        self.dest_y = tk.Entry(row, width=7, font=('Segoe UI', 12), bg=THEME['bg3'], fg=THEME['text'])
+        tk.Label(row, text="Y:", font=('Segoe UI', 12, 'bold'),
+                bg=THEME['bg2'], fg=THEME['text']).pack(side='left', padx=(20, 0))
+        self.dest_y = tk.Entry(row, width=8, font=('Segoe UI', 14),
+                               bg=THEME['bg3'], fg=THEME['text'],
+                               justify='center')
         self.dest_y.pack(side='left', padx=5)
         
-        tk.Label(frame, text="─── OU Zaap ───", bg=THEME['bg2'], fg=THEME['text2']).pack(pady=5)
+        # Zaaps dropdown
+        tk.Label(frame, text="─── OU choisir un Zaap ───",
+                font=('Segoe UI', 9), bg=THEME['bg2'], fg=THEME['text2']).pack(pady=5)
         
         self.zaap_var = tk.StringVar()
-        combo = ttk.Combobox(frame, textvariable=self.zaap_var, width=30,
-                            values=WorldMap.get_zaap_list(), state='readonly')
-        combo.pack()
-        combo.bind('<<ComboboxSelected>>', self.on_zaap_selected)
+        zaap_combo = ttk.Combobox(frame, textvariable=self.zaap_var, width=35,
+                                  values=WorldMap.get_zaap_list(), state='readonly',
+                                  font=('Segoe UI', 10))
+        zaap_combo.pack()
+        zaap_combo.bind('<<ComboboxSelected>>', self.on_zaap_selected)
         
-        # Options
+        # ═══════════════════════════════════════════════
+        # OPTIONS
+        # ═══════════════════════════════════════════════
         frame = tk.LabelFrame(tab, text="⚙️ Options", font=('Segoe UI', 10, 'bold'),
                               bg=THEME['bg2'], fg=THEME['text'], padx=15, pady=10)
         frame.pack(fill='x', padx=10, pady=5)
         
-        self.use_zaaps_var = tk.BooleanVar(value=self.config.data.get("use_zaaps", True))
-        tk.Checkbutton(frame, text="🌀 Utiliser Zaaps", variable=self.use_zaaps_var,
-                      bg=THEME['bg2'], fg=THEME['text'], selectcolor=THEME['bg3']).pack(anchor='w')
-        
         row = tk.Frame(frame, bg=THEME['bg2'])
-        row.pack(fill='x', pady=5)
-        tk.Label(row, text="Délai:", bg=THEME['bg2'], fg=THEME['text']).pack(side='left')
+        row.pack(fill='x')
+        
+        self.use_zaaps_var = tk.BooleanVar(value=self.config.data.get("use_zaaps", True))
+        tk.Checkbutton(row, text="🌀 Utiliser les Zaaps", variable=self.use_zaaps_var,
+                      font=('Segoe UI', 10), bg=THEME['bg2'], fg=THEME['text'],
+                      selectcolor=THEME['bg3']).pack(side='left')
+        
+        tk.Label(row, text="Délai:", bg=THEME['bg2'], fg=THEME['text']).pack(side='left', padx=(30, 5))
         self.delay_var = tk.StringVar(value=str(self.config.data.get("move_delay", 1.5)))
         tk.Spinbox(row, from_=0.5, to=5.0, increment=0.1, width=5,
-                  textvariable=self.delay_var).pack(side='left', padx=5)
+                  textvariable=self.delay_var, font=('Segoe UI', 10)).pack(side='left')
+        tk.Label(row, text="sec", bg=THEME['bg2'], fg=THEME['text2']).pack(side='left', padx=5)
         
-        # Boutons
+        # ═══════════════════════════════════════════════
+        # BOUTONS
+        # ═══════════════════════════════════════════════
         frame = tk.Frame(tab, bg=THEME['bg'])
         frame.pack(fill='x', padx=10, pady=10)
         
-        tk.Button(frame, text="🔍 CALCULER", font=('Segoe UI', 12, 'bold'),
-                 bg=THEME['accent2'], fg='white', width=20,
+        tk.Button(frame, text="🔍 CALCULER LE CHEMIN", font=('Segoe UI', 12, 'bold'),
+                 bg=THEME['accent2'], fg='white', width=25, height=2,
                  command=self.calculate_path).pack(pady=5)
         
         row = tk.Frame(frame, bg=THEME['bg'])
-        row.pack()
-        tk.Button(row, text="▶️ GO (F5)", font=('Segoe UI', 11, 'bold'),
-                 bg=THEME['success'], fg='white', width=12,
-                 command=self.start_travel).pack(side='left', padx=3)
-        tk.Button(row, text="⏸️ Pause", bg=THEME['warning'], fg='white', width=10,
-                 command=self.pause_travel).pack(side='left', padx=3)
-        tk.Button(row, text="⏹️ Stop", bg=THEME['accent'], fg='white', width=10,
-                 command=self.stop_travel).pack(side='left', padx=3)
+        row.pack(pady=5)
         
-        # Chemin
-        frame = tk.LabelFrame(tab, text="📋 Chemin", font=('Segoe UI', 10, 'bold'),
+        tk.Button(row, text="▶️ GO! (F5)", font=('Segoe UI', 12, 'bold'),
+                 bg=THEME['success'], fg='white', width=14, height=2,
+                 command=self.start_travel).pack(side='left', padx=5)
+        tk.Button(row, text="⏸️ Pause (F6)", font=('Segoe UI', 10),
+                 bg=THEME['warning'], fg='white', width=12, height=2,
+                 command=self.pause_travel).pack(side='left', padx=5)
+        tk.Button(row, text="⏹️ Stop (F7)", font=('Segoe UI', 10),
+                 bg=THEME['accent'], fg='white', width=12, height=2,
+                 command=self.stop_travel).pack(side='left', padx=5)
+        
+        # ═══════════════════════════════════════════════
+        # CHEMIN + LOG
+        # ═══════════════════════════════════════════════
+        frame = tk.LabelFrame(tab, text="📋 Chemin calculé", font=('Segoe UI', 10, 'bold'),
                               bg=THEME['bg2'], fg=THEME['text'], padx=10, pady=5)
         frame.pack(fill='x', padx=10, pady=5)
-        self.path_text = tk.Text(frame, height=5, font=('Consolas', 9),
+        self.path_text = tk.Text(frame, height=4, font=('Consolas', 9),
                                  bg=THEME['bg3'], fg=THEME['text'])
         self.path_text.pack(fill='x')
         
-        # Log
         frame = tk.LabelFrame(tab, text="📜 Log", font=('Segoe UI', 10, 'bold'),
                               bg=THEME['bg2'], fg=THEME['text'], padx=10, pady=5)
         frame.pack(fill='both', expand=True, padx=10, pady=5)
@@ -591,116 +586,58 @@ class TravelBotGUI:
                                 bg=THEME['bg3'], fg=THEME['text'])
         self.log_text.pack(fill='both', expand=True)
         
-        self.log("🗺️ Travel Bot v3.2")
-        if HAS_OCR:
-            self.log("✅ OCR disponible")
-        else:
-            self.log("⚠️ OCR non disponible")
-            self.log("   → Entre ta position manuellement")
+        self.log("🗺️ Travel Bot v3.3")
+        self.log("─" * 35)
+        self.log("1. Entre ta position (depuis Dofus)")
+        self.log("2. Entre ta destination ou choisis un Zaap")
+        self.log("3. Clique CALCULER puis GO!")
     
     def create_calibration_tab(self, notebook):
         tab = tk.Frame(notebook, bg=THEME['bg'])
         notebook.add(tab, text="🎯 Calibration")
         
-        # === OCR SECTION ===
-        frame = tk.LabelFrame(tab, text="📍 OCR - Lecture des coordonnées", 
+        tk.Label(tab, text="🎯 Calibration des clics", font=('Segoe UI', 14, 'bold'),
+                bg=THEME['bg'], fg=THEME['text']).pack(pady=15)
+        
+        tk.Label(tab, text="Configure où le bot doit cliquer pour changer de map",
+                font=('Segoe UI', 10), bg=THEME['bg'], fg=THEME['text2']).pack()
+        
+        # Clics
+        frame = tk.LabelFrame(tab, text="🖱️ Positions de clic",
                               font=('Segoe UI', 10, 'bold'),
                               bg=THEME['bg2'], fg=THEME['text'], padx=15, pady=10)
-        frame.pack(fill='x', padx=10, pady=5)
-        
-        if not HAS_OCR:
-            # Instructions pour installer Tesseract
-            tk.Label(frame, text="⚠️ Tesseract OCR n'est pas installé", 
-                    font=('Segoe UI', 11, 'bold'),
-                    bg=THEME['bg2'], fg=THEME['warning']).pack(pady=5)
-            
-            tk.Label(frame, text="Pour activer la détection automatique des coordonnées:",
-                    bg=THEME['bg2'], fg=THEME['text']).pack(anchor='w')
-            
-            instructions = tk.Frame(frame, bg=THEME['bg3'], padx=10, pady=10)
-            instructions.pack(fill='x', pady=10)
-            
-            tk.Label(instructions, text="1. Télécharge Tesseract OCR:", 
-                    bg=THEME['bg3'], fg=THEME['text']).pack(anchor='w')
-            
-            tk.Button(instructions, text="📥 Télécharger Tesseract", 
-                     bg=THEME['accent2'], fg='white',
-                     command=lambda: webbrowser.open(
-                         "https://github.com/UB-Mannheim/tesseract/wiki")).pack(pady=5)
-            
-            tk.Label(instructions, text="2. Installe-le (garde le chemin par défaut)",
-                    bg=THEME['bg3'], fg=THEME['text']).pack(anchor='w')
-            
-            tk.Label(instructions, text="3. Relance le Travel Bot",
-                    bg=THEME['bg3'], fg=THEME['text']).pack(anchor='w')
-            
-            tk.Label(frame, text="💡 En attendant, entre ta position manuellement\n"
-                                "   (regarde en haut à gauche dans Dofus)",
-                    bg=THEME['bg2'], fg=THEME['text2']).pack(pady=10)
-        else:
-            # Zone OCR
-            tk.Label(frame, text="✅ Tesseract OCR installé!", 
-                    font=('Segoe UI', 10, 'bold'),
-                    bg=THEME['bg2'], fg=THEME['success']).pack()
-            
-            row = tk.Frame(frame, bg=THEME['bg2'])
-            row.pack(fill='x', pady=5)
-            
-            region = self.config.data.get("coords_region", {})
-            
-            for label, key, default in [("X:", "x", 232), ("Y:", "y", 78), 
-                                         ("L:", "width", 160), ("H:", "height", 25)]:
-                tk.Label(row, text=label, bg=THEME['bg2'], fg=THEME['text']).pack(side='left')
-                entry = tk.Entry(row, width=5, bg=THEME['bg3'], fg=THEME['text'])
-                entry.insert(0, str(region.get(key, default)))
-                entry.pack(side='left', padx=3)
-                setattr(self, f"ocr_{key}", entry)
-            
-            tk.Button(frame, text="🧪 Tester OCR", bg=THEME['accent2'], fg='white',
-                     command=self.test_ocr).pack(pady=5)
-            
-            # Aperçu
-            self.preview_label = tk.Label(frame, bg=THEME['bg3'], text="(tester pour voir)")
-            self.preview_label.pack(pady=5)
-            
-            self.ocr_result = tk.Label(frame, text="", font=('Segoe UI', 11, 'bold'),
-                                       bg=THEME['bg2'], fg=THEME['success'])
-            self.ocr_result.pack()
-        
-        # === CLICS ===
-        frame = tk.LabelFrame(tab, text="🖱️ Clics changement de map",
-                              font=('Segoe UI', 10, 'bold'),
-                              bg=THEME['bg2'], fg=THEME['text'], padx=15, pady=10)
-        frame.pack(fill='x', padx=10, pady=5)
+        frame.pack(fill='x', padx=20, pady=15)
         
         self.click_entries = {}
         for d, label in [("up", "↑ Haut"), ("down", "↓ Bas"), ("left", "← Gauche"), ("right", "→ Droite")]:
             row = tk.Frame(frame, bg=THEME['bg2'])
-            row.pack(fill='x', pady=2)
+            row.pack(fill='x', pady=3)
             
-            tk.Label(row, text=f"{label}:", width=10, anchor='w',
+            tk.Label(row, text=f"{label}:", width=12, anchor='w', font=('Segoe UI', 10),
                     bg=THEME['bg2'], fg=THEME['text']).pack(side='left')
             
             pos = self.config.data.get("click_positions", {}).get(d, {"x": 0, "y": 0})
             
-            x_e = tk.Entry(row, width=6, bg=THEME['bg3'], fg=THEME['text'])
+            tk.Label(row, text="X:", bg=THEME['bg2'], fg=THEME['text']).pack(side='left')
+            x_e = tk.Entry(row, width=6, bg=THEME['bg3'], fg=THEME['text'], font=('Segoe UI', 10))
             x_e.insert(0, str(pos["x"]))
-            x_e.pack(side='left', padx=2)
+            x_e.pack(side='left', padx=3)
             
-            y_e = tk.Entry(row, width=6, bg=THEME['bg3'], fg=THEME['text'])
+            tk.Label(row, text="Y:", bg=THEME['bg2'], fg=THEME['text']).pack(side='left')
+            y_e = tk.Entry(row, width=6, bg=THEME['bg3'], fg=THEME['text'], font=('Segoe UI', 10))
             y_e.insert(0, str(pos["y"]))
-            y_e.pack(side='left', padx=2)
+            y_e.pack(side='left', padx=3)
             
             self.click_entries[d] = (x_e, y_e)
             
-            tk.Button(row, text="🎯", bg=THEME['card'], fg=THEME['text'],
-                     command=lambda d=d: self.calibrate_click(d)).pack(side='left', padx=5)
+            tk.Button(row, text="🎯 Calibrer", bg=THEME['accent2'], fg='white',
+                     command=lambda d=d: self.calibrate_click(d)).pack(side='left', padx=10)
         
-        # === ZAAP ===
-        frame = tk.LabelFrame(tab, text="🌀 Zaap",
+        # Zaap
+        frame = tk.LabelFrame(tab, text="🌀 Position du Zaap sur la map",
                               font=('Segoe UI', 10, 'bold'),
                               bg=THEME['bg2'], fg=THEME['text'], padx=15, pady=10)
-        frame.pack(fill='x', padx=10, pady=5)
+        frame.pack(fill='x', padx=20, pady=10)
         
         row = tk.Frame(frame, bg=THEME['bg2'])
         row.pack(fill='x')
@@ -708,29 +645,34 @@ class TravelBotGUI:
         zaap = self.config.data.get("zaap_click", {"x": 600, "y": 400})
         
         tk.Label(row, text="X:", bg=THEME['bg2'], fg=THEME['text']).pack(side='left')
-        self.zaap_x = tk.Entry(row, width=6, bg=THEME['bg3'], fg=THEME['text'])
+        self.zaap_x = tk.Entry(row, width=6, bg=THEME['bg3'], fg=THEME['text'], font=('Segoe UI', 10))
         self.zaap_x.insert(0, str(zaap["x"]))
         self.zaap_x.pack(side='left', padx=5)
         
         tk.Label(row, text="Y:", bg=THEME['bg2'], fg=THEME['text']).pack(side='left')
-        self.zaap_y = tk.Entry(row, width=6, bg=THEME['bg3'], fg=THEME['text'])
+        self.zaap_y = tk.Entry(row, width=6, bg=THEME['bg3'], fg=THEME['text'], font=('Segoe UI', 10))
         self.zaap_y.insert(0, str(zaap["y"]))
         self.zaap_y.pack(side='left', padx=5)
         
-        tk.Button(row, text="🎯", bg=THEME['card'], fg=THEME['text'],
-                 command=self.calibrate_zaap).pack(side='left', padx=5)
+        tk.Button(row, text="🎯 Calibrer", bg=THEME['accent2'], fg='white',
+                 command=self.calibrate_zaap).pack(side='left', padx=10)
         
-        # SAVE
-        tk.Button(tab, text="💾 SAUVEGARDER", font=('Segoe UI', 11, 'bold'),
-                 bg=THEME['success'], fg='white', command=self.save_calibration).pack(pady=15)
+        # Save
+        tk.Button(tab, text="💾 SAUVEGARDER", font=('Segoe UI', 12, 'bold'),
+                 bg=THEME['success'], fg='white', width=20,
+                 command=self.save_calibration).pack(pady=20)
     
     def create_zaaps_tab(self, notebook):
         tab = tk.Frame(notebook, bg=THEME['bg'])
         notebook.add(tab, text="🌀 Zaaps")
         
-        tk.Label(tab, text="🌀 Zaaps Connus", font=('Segoe UI', 14, 'bold'),
+        tk.Label(tab, text="🌀 Zaaps connus par ton personnage", font=('Segoe UI', 14, 'bold'),
                 bg=THEME['bg'], fg=THEME['text']).pack(pady=10)
         
+        tk.Label(tab, text="Coche les zaaps que tu as débloqués dans le jeu",
+                font=('Segoe UI', 10), bg=THEME['bg'], fg=THEME['text2']).pack()
+        
+        # Liste scrollable
         container = tk.Frame(tab, bg=THEME['bg2'])
         container.pack(fill='both', expand=True, padx=20, pady=10)
         
@@ -748,28 +690,32 @@ class TravelBotGUI:
         known = self.config.data.get("known_zaaps", [])
         self.zaap_vars = {}
         
-        for name, (x, y) in sorted(WorldMap.ZAAPS.items()):
-            var = tk.BooleanVar(value=(name in known))
-            self.zaap_vars[name] = var
+        for name, pos in WorldMap.ZAAPS.items():
+            short_name = name.split(" (")[0]
+            var = tk.BooleanVar(value=(short_name in known or name in known))
+            self.zaap_vars[short_name] = var
             
             f = tk.Frame(scroll_frame, bg=THEME['bg2'])
-            f.pack(fill='x', padx=10, pady=2)
+            f.pack(fill='x', padx=10, pady=3)
             
-            tk.Checkbutton(f, text=name, variable=var, bg=THEME['bg2'],
-                          fg=THEME['text'], selectcolor=THEME['bg3']).pack(side='left')
-            tk.Label(f, text=f"[{x}, {y}]", font=('Consolas', 9),
-                    bg=THEME['bg2'], fg=THEME['text2']).pack(side='right')
+            tk.Checkbutton(f, text=name, variable=var, font=('Segoe UI', 10),
+                          bg=THEME['bg2'], fg=THEME['text'],
+                          selectcolor=THEME['bg3']).pack(side='left')
         
+        # Boutons
         row = tk.Frame(tab, bg=THEME['bg'])
         row.pack(pady=10)
-        tk.Button(row, text="✅ Tout", bg=THEME['card'], fg=THEME['text'],
+        tk.Button(row, text="✅ Tout cocher", bg=THEME['card'], fg=THEME['text'],
                  command=lambda: [v.set(True) for v in self.zaap_vars.values()]).pack(side='left', padx=5)
-        tk.Button(row, text="❌ Rien", bg=THEME['card'], fg=THEME['text'],
+        tk.Button(row, text="❌ Tout décocher", bg=THEME['card'], fg=THEME['text'],
                  command=lambda: [v.set(False) for v in self.zaap_vars.values()]).pack(side='left', padx=5)
         tk.Button(row, text="💾 Sauvegarder", bg=THEME['success'], fg='white',
-                 command=self.save_zaaps).pack(side='left', padx=10)
+                 font=('Segoe UI', 10, 'bold'),
+                 command=self.save_zaaps).pack(side='left', padx=15)
     
-    # ===== METHODS =====
+    # ═══════════════════════════════════════════════
+    # MÉTHODES
+    # ═══════════════════════════════════════════════
     
     def log(self, msg):
         ts = time.strftime("%H:%M:%S")
@@ -779,26 +725,13 @@ class TravelBotGUI:
         self.log_text.insert('end', msg + "\n")
         self.log_text.see('end')
     
-    def detect_position(self):
-        if not HAS_OCR:
-            messagebox.showinfo("OCR", "Tesseract OCR n'est pas installé.\n\n"
-                               "Va dans l'onglet Calibration pour voir comment l'installer,\n"
-                               "ou entre ta position manuellement.")
-            return
-        
-        pos = self.bot.detect_position()
-        if pos:
-            self.current_x.delete(0, 'end')
-            self.current_x.insert(0, str(pos[0]))
-            self.current_y.delete(0, 'end')
-            self.current_y.insert(0, str(pos[1]))
-    
     def set_position(self):
         try:
-            x, y = int(self.current_x.get()), int(self.current_y.get())
+            x = int(self.current_x.get())
+            y = int(self.current_y.get())
             self.bot.set_position(x, y)
-        except:
-            messagebox.showerror("Erreur", "Coordonnées invalides!")
+        except ValueError:
+            messagebox.showerror("Erreur", "Entre des coordonnées valides!\n\nExemple: X=4, Y=-19")
     
     def on_zaap_selected(self, event):
         pos = WorldMap.get_zaap_pos(self.zaap_var.get())
@@ -807,15 +740,29 @@ class TravelBotGUI:
             self.dest_x.insert(0, str(pos[0]))
             self.dest_y.delete(0, 'end')
             self.dest_y.insert(0, str(pos[1]))
+            self.log(f"🎯 Destination: {self.zaap_var.get()}")
     
     def calculate_path(self):
+        # Valider position actuelle
         try:
-            cx, cy = int(self.current_x.get()), int(self.current_y.get())
-            dx, dy = int(self.dest_x.get()), int(self.dest_y.get())
-        except:
-            messagebox.showerror("Erreur", "Coordonnées invalides!")
+            cx = int(self.current_x.get())
+            cy = int(self.current_y.get())
+        except ValueError:
+            messagebox.showerror("Erreur", "Entre ta position actuelle!\n\n"
+                               "Regarde en haut à gauche dans Dofus:\n"
+                               "\"Coordonnées : X, Y\"")
             return
         
+        # Valider destination
+        try:
+            dx = int(self.dest_x.get())
+            dy = int(self.dest_y.get())
+        except ValueError:
+            messagebox.showerror("Erreur", "Entre une destination!\n\n"
+                               "Soit des coordonnées X/Y, soit choisis un Zaap")
+            return
+        
+        # Sauvegarder options
         self.config.data["use_zaaps"] = self.use_zaaps_var.get()
         try:
             self.config.data["move_delay"] = float(self.delay_var.get())
@@ -823,20 +770,27 @@ class TravelBotGUI:
             pass
         self.config.save()
         
+        # Calculer
         self.bot.set_position(cx, cy)
         path = self.bot.calculate_path(dx, dy)
         
+        # Afficher
         self.path_text.delete('1.0', 'end')
         if path:
             arrows = {"right": "→", "left": "←", "up": "↑", "down": "↓"}
-            self.path_text.insert('end', f"[{cx},{cy}] → [{dx},{dy}] = {len(path)} étapes\n\n")
-            for i, (m, p) in enumerate(path):
+            self.path_text.insert('end', f"[{cx},{cy}] → [{dx},{dy}] = {len(path)} étapes\n")
+            for i, (m, p) in enumerate(path[:10]):  # Max 10 lignes
                 if str(m).startswith("zaap:"):
-                    self.path_text.insert('end', f"{i+1}. 🌀 {m.split(':')[1]}\n")
+                    name = m.split(":")[1].split("(")[0].strip()
+                    self.path_text.insert('end', f"{i+1}. 🌀 {name}\n")
                 else:
                     self.path_text.insert('end', f"{i+1}. {arrows.get(m,'?')} [{p[0]},{p[1]}]\n")
+            if len(path) > 10:
+                self.path_text.insert('end', f"... +{len(path)-10} étapes\n")
+        elif path == []:
+            self.path_text.insert('end', "✅ Tu es déjà à destination!")
         else:
-            self.path_text.insert('end', "❌ Pas de chemin!")
+            self.path_text.insert('end', "❌ Pas de chemin trouvé!")
     
     def start_travel(self):
         if not self.bot.current_path:
@@ -850,35 +804,12 @@ class TravelBotGUI:
     def stop_travel(self):
         self.bot.stop()
     
-    def test_ocr(self):
-        if not HAS_OCR:
-            return
-        
-        try:
-            self.config.data["coords_region"] = {
-                "x": int(self.ocr_x.get()), "y": int(self.ocr_y.get()),
-                "width": int(self.ocr_width.get()), "height": int(self.ocr_height.get())
-            }
-        except:
-            pass
-        
-        pos = self.bot.detector.detect_position()
-        
-        self.preview_image = self.bot.detector.get_capture_tk()
-        if self.preview_image:
-            self.preview_label.config(image=self.preview_image, text="")
-        
-        if pos:
-            self.ocr_result.config(text=f"✅ [{pos[0]}, {pos[1]}]", fg=THEME['success'])
-            self.current_x.delete(0, 'end')
-            self.current_x.insert(0, str(pos[0]))
-            self.current_y.delete(0, 'end')
-            self.current_y.insert(0, str(pos[1]))
-        else:
-            self.ocr_result.config(text="❌ OCR échoué - ajuste la zone", fg=THEME['accent'])
-    
     def calibrate_click(self, d):
-        messagebox.showinfo("Calibration", f"OK puis clique sur '{d}' dans 3s")
+        labels = {"up": "HAUT", "down": "BAS", "left": "GAUCHE", "right": "DROITE"}
+        messagebox.showinfo("Calibration", 
+                           f"Clique OK, puis dans 3 secondes,\n"
+                           f"clique sur le bord {labels[d]} de l'écran Dofus\n"
+                           f"(là où tu cliques pour changer de map)")
         
         def do():
             for i in range(3, 0, -1):
@@ -889,12 +820,14 @@ class TravelBotGUI:
             self.click_entries[d][0].insert(0, str(x))
             self.click_entries[d][1].delete(0, 'end')
             self.click_entries[d][1].insert(0, str(y))
-            self.log(f"✅ {d}: {x}, {y}")
+            self.log(f"✅ {d}: X={x}, Y={y}")
         
         threading.Thread(target=do, daemon=True).start()
     
     def calibrate_zaap(self):
-        messagebox.showinfo("Calibration", "OK puis clique sur le zaap dans 3s")
+        messagebox.showinfo("Calibration",
+                           "Clique OK, puis dans 3 secondes,\n"
+                           "clique sur le ZAAP dans le jeu")
         
         def do():
             for i in range(3, 0, -1):
@@ -905,25 +838,25 @@ class TravelBotGUI:
             self.zaap_x.insert(0, str(x))
             self.zaap_y.delete(0, 'end')
             self.zaap_y.insert(0, str(y))
-            self.log(f"✅ Zaap: {x}, {y}")
+            self.log(f"✅ Zaap: X={x}, Y={y}")
         
         threading.Thread(target=do, daemon=True).start()
     
     def save_calibration(self):
         try:
-            if HAS_OCR:
-                self.config.data["coords_region"] = {
-                    "x": int(self.ocr_x.get()), "y": int(self.ocr_y.get()),
-                    "width": int(self.ocr_width.get()), "height": int(self.ocr_height.get())
+            for d, (x_e, y_e) in self.click_entries.items():
+                self.config.data["click_positions"][d] = {
+                    "x": int(x_e.get()), "y": int(y_e.get())
                 }
             
-            for d, (x_e, y_e) in self.click_entries.items():
-                self.config.data["click_positions"][d] = {"x": int(x_e.get()), "y": int(y_e.get())}
-            
-            self.config.data["zaap_click"] = {"x": int(self.zaap_x.get()), "y": int(self.zaap_y.get())}
+            self.config.data["zaap_click"] = {
+                "x": int(self.zaap_x.get()),
+                "y": int(self.zaap_y.get())
+            }
             
             self.config.save()
-            messagebox.showinfo("OK", "✅ Sauvegardé!")
+            messagebox.showinfo("OK", "✅ Calibration sauvegardée!")
+            self.log("💾 Calibration sauvegardée")
         except Exception as e:
             messagebox.showerror("Erreur", str(e))
     
@@ -932,7 +865,8 @@ class TravelBotGUI:
         self.config.data["known_zaaps"] = known
         self.config.save()
         self.bot.pathfinder.known_zaaps = known
-        messagebox.showinfo("OK", f"✅ {len(known)} zaaps!")
+        messagebox.showinfo("OK", f"✅ {len(known)} zaaps sauvegardés!")
+        self.log(f"💾 {len(known)} zaaps sauvegardés")
 
 
 # ============================================================
@@ -942,7 +876,8 @@ class TravelBotGUI:
 if __name__ == "__main__":
     if not HAS_DEPS:
         print("❌ Dépendances manquantes!")
-        input("Entrée...")
+        print("Lance Installer.bat")
+        input("Entrée pour fermer...")
     else:
         app = TravelBotGUI()
         app.run()
