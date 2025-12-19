@@ -74,7 +74,17 @@ class Updater:
             response = requests.get(url, timeout=10)
             
             if response.status_code == 200:
-                remote_data = response.json()
+                try:
+                    # Nettoyer le contenu (enlever BOM si présent)
+                    content = response.text.strip()
+                    if content.startswith('\ufeff'):
+                        content = content[1:]
+                    
+                    remote_data = json.loads(content)
+                except Exception as e:
+                    self.log(f"⚠️ version.json invalide: {str(e)[:30]}")
+                    return None
+                
                 remote_version = remote_data.get("version", "0.0.0")
                 
                 if self.compare_versions(remote_version, self.current_version) > 0:
@@ -83,11 +93,14 @@ class Updater:
                 else:
                     self.log("✅ À jour")
                     return None
+            elif response.status_code == 404:
+                self.log("⚠️ version.json introuvable")
+                return None
             else:
-                self.log("⚠️ GitHub non accessible")
+                self.log(f"⚠️ Erreur GitHub ({response.status_code})")
                 return None
         except Exception as e:
-            self.log(f"⚠️ Erreur: {e}")
+            self.log(f"⚠️ Erreur: {str(e)[:50]}")
             return None
     
     def compare_versions(self, v1, v2):

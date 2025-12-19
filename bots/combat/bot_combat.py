@@ -33,6 +33,41 @@ try:
 except ImportError:
     HAS_REQUESTS = False
 
+# OCR pour lire les MP
+HAS_OCR = False
+try:
+    import pytesseract
+    
+    # Chemins possibles pour Tesseract sur Windows
+    tesseract_paths = [
+        r"C:\Program Files\Tesseract-OCR\tesseract.exe",
+        r"C:\Program Files (x86)\Tesseract-OCR\tesseract.exe",
+        r"C:\Tesseract-OCR\tesseract.exe",
+        os.path.expandvars(r"%LOCALAPPDATA%\Programs\Tesseract-OCR\tesseract.exe"),
+        os.path.expandvars(r"%LOCALAPPDATA%\Tesseract-OCR\tesseract.exe"),
+    ]
+    
+    # Chercher Tesseract
+    for path in tesseract_paths:
+        if os.path.exists(path):
+            pytesseract.pytesseract.tesseract_cmd = path
+            HAS_OCR = True
+            print(f"✅ Tesseract trouvé: {path}")
+            break
+    
+    if not HAS_OCR:
+        # Tester si tesseract est dans le PATH
+        try:
+            pytesseract.get_tesseract_version()
+            HAS_OCR = True
+            print("✅ Tesseract disponible (PATH)")
+        except:
+            print("⚠️ Tesseract non trouvé - OCR désactivé")
+            print("   Installe depuis: https://github.com/UB-Mannheim/tesseract/wiki")
+            
+except ImportError:
+    print("⚠️ pytesseract non installé - pip install pytesseract")
+
 
 def press_key(key):
     """Appuie sur une touche"""
@@ -75,12 +110,15 @@ def send_ntfy(topic, message, image_path=None):
             with open(image_path, 'rb') as f:
                 image_data = f.read()
             
+            # Déterminer le nom de fichier
+            filename = os.path.basename(image_path)
+            
             req = urllib.request.Request(url, data=image_data)
             req.add_header('Title', 'MP Dofus!')
             req.add_header('Tags', 'envelope,warning')
-            req.add_header('Filename', 'screenshot.png')
+            req.add_header('Filename', filename)
             req.add_header('Message', message)
-            urllib.request.urlopen(req, timeout=15)
+            urllib.request.urlopen(req, timeout=30)  # Timeout plus long
         else:
             # Envoyer sans image
             data = message.encode('utf-8')
@@ -359,23 +397,109 @@ class CombatEngine:
         
         self.log("⚠️ BOT ARRÊTÉ - MP reçu!")
         
-        # Prendre un screenshot automatique
-        screenshot_path = None
-        try:
-            screenshot = ImageGrab.grab()
-            screenshot_path = os.path.join(self.config.script_dir, "last_mp.png")
-            screenshot.save(screenshot_path)
-            self.log("📸 Screenshot sauvegardé")
-        except:
-            pass
+        # Lire le contenu du MP avec OCR
+        mp_text = self.read_mp_with_ocr()
         
-        # Envoyer notification avec screenshot
-        message = "Tu as recu un MP sur Dofus!"
-        send_notification(self.config.data, message, screenshot_path)
+        # Construire le message
+        if mp_text:
+            message = f"📩 MP Dofus!\n\n{mp_text}"
+        else:
+            message = "📩 Tu as recu un MP sur Dofus!"
+        
+        # Envoyer notification TEXTE uniquement (pas d'image)
+        send_notification(self.config.data, message, None)
         self.log("📱 Notification envoyee!")
         
         if self.callback:
-            self.callback("mp_detected", screenshot_path)
+            self.callback("mp_detected", mp_text)
+    
+    def read_mp_with_ocr(self):
+        """Lit le contenu du chat MP avec OCR"""
+        if not HAS_OCR:
+            self.log("⚠️ OCR non disponible")
+            return None
+        
+        try:
+            # Capturer l'écran
+            screenshot = ImageGrab.grab()
+            w, h = screenshot.size
+            
+            # Zone du chat (là où les MP apparaissent)
+            left = 0
+            top = int(h * 0.6)
+            right = int(w * 0.5)
+            bottom = int(h * 0.95)
+            
+            chat_area = screenshot.crop((left, top, right, bottom))
+            
+            # Convertir en array numpy pour traitement
+            img = np.array(chat_area)
+            
+            # Améliorer le contraste pour l'OCR (texte clair sur fond sombre)
+            gray = cv2.cvtColor(img, cv2.COLOR_RGB2GRAY)
+            
+            # Inverser si l'image est sombre (texte clair)
+            if np.mean(gray) < 128:
+                gray = cv2.bitwise_not(gray)
+            
+            # Augmenter le contraste
+            gray = cv2.convertScaleAbs(gray, alpha=1.5, beta=30)
+            
+            # Convertir en PIL pour pytesseract
+            from PIL import Image as PILImage
+            pil_img = PILImage.fromarray(gray)
+            
+            # OCR avec config pour meilleure détection
+            # Utiliser 'eng' (toujours installé) au lieu de 'fra'
+            custom_config = r'--oem 3 --psm 6'
+            try:
+                text = pytesseract.image_to_string(pil_img, lang='eng', config=custom_config)
+            except:
+                # Fallback sans langue spécifique
+                text = pytesseract.image_to_string(pil_img, config=custom_config)
+            
+            if not text.strip():
+                # Essayer sans preprocessing
+                try:
+                    text = pytesseract.image_to_string(chat_area, lang='eng')
+                except:
+                    text = pytesseract.image_to_string(chat_area)
+            
+            if not text.strip():
+                self.log("⚠️ OCR: aucun texte détecté")
+                return None
+            
+            # Chercher les lignes avec "de" (format MP)
+            lines = text.split('\n')
+            mp_lines = []
+            
+            for line in lines:
+                line = line.strip()
+                if not line:
+                    continue
+                # Chercher le pattern "de Pseudo :" ou "[Pseudo]" ou qui contient ":"
+                line_lower = line.lower()
+                if ' de ' in line_lower or line_lower.startswith('de ') or ('[' in line and ']' in line):
+                    mp_lines.append(line)
+            
+            if mp_lines:
+                # Prendre le dernier MP trouvé
+                last_mp = mp_lines[-1]
+                self.log(f"📖 MP lu: {last_mp[:60]}...")
+                return last_mp
+            else:
+                # Retourner les dernières lignes non-vides du chat
+                recent = [l.strip() for l in lines if l.strip()][-3:]
+                if recent:
+                    result = '\n'.join(recent)
+                    self.log(f"📖 Chat: {result[:60]}...")
+                    return result
+                
+            return None
+            
+        except Exception as e:
+            self.log(f"❌ Erreur OCR: {e}")
+            return None
     
     def detect_mob(self, frame):
         """Détecte un mob sur l'écran"""
@@ -764,7 +888,7 @@ class CombatGUI:
         elif event == "mp_detected":
             self.root.after(0, lambda: self.on_mp_detected(data))
     
-    def on_mp_detected(self, screenshot_path=None):
+    def on_mp_detected(self, mp_text=None):
         """Appelé quand un MP est détecté"""
         self.status_label.config(text="🚨 MP!", fg=self.colors['record'])
         self.start_btn.config(state='normal')
@@ -779,14 +903,14 @@ class CombatGUI:
         except:
             pass
         
-        # Afficher la popup simple
-        self.show_mp_popup(screenshot_path)
+        # Afficher la popup avec le texte du MP
+        self.show_mp_popup(mp_text)
     
-    def show_mp_popup(self, screenshot_path=None):
+    def show_mp_popup(self, mp_text=None):
         """Affiche une popup simple d'alerte MP"""
         popup = tk.Toplevel(self.root)
         popup.title("📩 MP Reçu!")
-        popup.geometry("350x200")
+        popup.geometry("400x250")
         popup.configure(bg=self.colors['bg'])
         popup.transient(self.root)
         popup.grab_set()
@@ -794,44 +918,38 @@ class CombatGUI:
         
         # Centre la popup
         popup.update_idletasks()
-        x = (popup.winfo_screenwidth() - 350) // 2
-        y = (popup.winfo_screenheight() - 200) // 2
-        popup.geometry(f"350x200+{x}+{y}")
+        x = (popup.winfo_screenwidth() - 400) // 2
+        y = (popup.winfo_screenheight() - 250) // 2
+        popup.geometry(f"400x250+{x}+{y}")
         
         # Header
         tk.Label(popup, text="📩 Tu as reçu un MP!", font=('Segoe UI', 18, 'bold'),
-                bg=self.colors['bg'], fg=self.colors['accent']).pack(pady=20)
+                bg=self.colors['bg'], fg=self.colors['accent']).pack(pady=15)
         
-        tk.Label(popup, text="Le bot s'est arrêté automatiquement.\nVa voir dans Dofus qui t'a écrit!", 
-                font=('Segoe UI', 11), bg=self.colors['bg'], fg=self.colors['text'],
-                justify='center').pack(pady=10)
+        # Afficher le texte du MP si disponible
+        if mp_text:
+            msg_frame = tk.Frame(popup, bg=self.colors['bg2'], padx=15, pady=10)
+            msg_frame.pack(fill='x', padx=20, pady=5)
+            
+            tk.Label(msg_frame, text="💬 Message:", font=('Segoe UI', 9),
+                    bg=self.colors['bg2'], fg=self.colors['text2']).pack(anchor='w')
+            
+            msg_label = tk.Label(msg_frame, text=mp_text, font=('Segoe UI', 11),
+                                bg=self.colors['bg2'], fg=self.colors['text'],
+                                wraplength=350, justify='left')
+            msg_label.pack(anchor='w', pady=5)
+        else:
+            tk.Label(popup, text="Le bot s'est arrêté automatiquement.\nVa voir dans Dofus qui t'a écrit!", 
+                    font=('Segoe UI', 11), bg=self.colors['bg'], fg=self.colors['text'],
+                    justify='center').pack(pady=10)
         
-        # Boutons
-        btn_frame = tk.Frame(popup, bg=self.colors['bg'])
-        btn_frame.pack(pady=20)
-        
+        # Bouton OK
         def close_popup():
             popup.destroy()
         
-        def view_screenshot():
-            if screenshot_path and os.path.exists(screenshot_path):
-                try:
-                    os.startfile(screenshot_path)
-                except:
-                    try:
-                        import subprocess
-                        subprocess.run(['xdg-open', screenshot_path])
-                    except:
-                        pass
-        
-        tk.Button(btn_frame, text="✅ OK", font=('Segoe UI', 12, 'bold'),
+        tk.Button(popup, text="✅ OK", font=('Segoe UI', 12, 'bold'),
                  bg=self.colors['success'], fg='white', width=10,
-                 command=close_popup).pack(side='left', padx=10)
-        
-        if screenshot_path and os.path.exists(screenshot_path):
-            tk.Button(btn_frame, text="📸 Screenshot", font=('Segoe UI', 10),
-                     bg=self.colors['bg3'], fg='white', width=12,
-                     command=view_screenshot).pack(side='left', padx=10)
+                 command=close_popup).pack(pady=20)
         
         popup.bind('<Return>', lambda e: close_popup())
         popup.bind('<Escape>', lambda e: close_popup())
