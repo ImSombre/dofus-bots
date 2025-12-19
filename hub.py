@@ -5,7 +5,7 @@ Système de mise à jour automatique via GitHub
 """
 
 import tkinter as tk
-from tkinter import ttk, messagebox
+from tkinter import ttk, messagebox, simpledialog
 import subprocess
 import sys
 import os
@@ -24,14 +24,50 @@ except ImportError:
 # ============================================================
 #                    CONFIGURATION
 # ============================================================
+class HubConfig:
+    def __init__(self):
+        try:
+            self.base_dir = os.path.dirname(os.path.abspath(__file__))
+        except:
+            self.base_dir = os.getcwd()
+        
+        self.config_file = os.path.join(self.base_dir, "hub_config.json")
+        self.data = self.load()
+    
+    def load(self):
+        if os.path.exists(self.config_file):
+            try:
+                with open(self.config_file, 'r', encoding='utf-8') as f:
+                    return json.load(f)
+            except:
+                pass
+        
+        # Config par défaut
+        return {
+            "github_user": "",
+            "github_repo": "dofus-bots",
+            "github_branch": "main",
+            "first_run": True
+        }
+    
+    def save(self):
+        try:
+            with open(self.config_file, 'w', encoding='utf-8') as f:
+                json.dump(self.data, f, indent=2)
+            return True
+        except:
+            return False
+    
+    def get_github_url(self):
+        user = self.data.get("github_user", "")
+        repo = self.data.get("github_repo", "dofus-bots")
+        branch = self.data.get("github_branch", "main")
+        
+        if not user:
+            return None
+        
+        return f"https://raw.githubusercontent.com/{user}/{repo}/{branch}"
 
-# 🔧 CONFIGURE TON GITHUB ICI
-GITHUB_USER = "ton-username"  # Ton nom d'utilisateur GitHub
-GITHUB_REPO = "dofus-bots"     # Nom du repo
-GITHUB_BRANCH = "main"         # Branche (main ou master)
-
-# URL de base pour les fichiers raw
-GITHUB_RAW_URL = f"https://raw.githubusercontent.com/{GITHUB_USER}/{GITHUB_REPO}/{GITHUB_BRANCH}"
 
 # Version locale
 LOCAL_VERSION = "1.0.0"
@@ -79,8 +115,9 @@ class PathManager:
 #                    SYSTÈME DE MISE À JOUR
 # ============================================================
 class Updater:
-    def __init__(self, paths, callback=None):
+    def __init__(self, paths, config, callback=None):
         self.paths = paths
+        self.config = config
         self.callback = callback
         self.current_version = self.get_local_version()
     
@@ -114,11 +151,16 @@ class Updater:
             self.log("⚠️ Module 'requests' non disponible")
             return None
         
+        github_url = self.config.get_github_url()
+        if not github_url:
+            self.log("⚠️ GitHub non configuré")
+            return None
+        
         try:
             self.log("🔍 Vérification des mises à jour...")
             
             # Télécharger version.json depuis GitHub
-            url = f"{GITHUB_RAW_URL}/version.json"
+            url = f"{github_url}/version.json"
             response = requests.get(url, timeout=10)
             
             if response.status_code == 200:
@@ -143,7 +185,7 @@ class Updater:
             return None
     
     def compare_versions(self, v1, v2):
-        """Compare deux versions (retourne 1 si v1 > v2, -1 si v1 < v2, 0 si égales)"""
+        """Compare deux versions"""
         try:
             parts1 = [int(x) for x in v1.split('.')]
             parts2 = [int(x) for x in v2.split('.')]
@@ -166,6 +208,10 @@ class Updater:
         if not HAS_REQUESTS:
             return False
         
+        github_url = self.config.get_github_url()
+        if not github_url:
+            return False
+        
         try:
             files_to_update = update_info.get("files", [])
             new_version = update_info.get("version", self.current_version)
@@ -174,18 +220,16 @@ class Updater:
             
             for file_info in files_to_update:
                 file_path = file_info.get("path", "")
-                file_url = f"{GITHUB_RAW_URL}/{file_path}"
+                file_url = f"{github_url}/{file_path}"
                 
                 self.log(f"   📄 {file_path}")
                 
                 try:
                     response = requests.get(file_url, timeout=30)
                     if response.status_code == 200:
-                        # Créer le dossier si nécessaire
                         local_path = os.path.join(self.paths.base_dir, file_path)
                         os.makedirs(os.path.dirname(local_path), exist_ok=True)
                         
-                        # Écrire le fichier
                         with open(local_path, 'wb') as f:
                             f.write(response.content)
                     else:
@@ -193,7 +237,6 @@ class Updater:
                 except Exception as e:
                     self.log(f"      ❌ {e}")
             
-            # Sauvegarder la nouvelle version
             self.save_local_version(new_version)
             self.current_version = new_version
             
@@ -231,22 +274,142 @@ BOTS = [
 
 
 # ============================================================
+#                    ASSISTANT DE CONFIGURATION
+# ============================================================
+class SetupWizard:
+    def __init__(self, parent, config, on_complete):
+        self.config = config
+        self.on_complete = on_complete
+        
+        self.dialog = tk.Toplevel(parent)
+        self.dialog.title("🚀 Configuration initiale")
+        self.dialog.geometry("600x500")
+        self.dialog.configure(bg=THEME['bg'])
+        self.dialog.transient(parent)
+        self.dialog.grab_set()
+        
+        # Centrer
+        self.dialog.update_idletasks()
+        x = parent.winfo_x() + (parent.winfo_width() - 600) // 2
+        y = parent.winfo_y() + (parent.winfo_height() - 500) // 2
+        self.dialog.geometry(f"600x500+{x}+{y}")
+        
+        self.create_widgets()
+    
+    def create_widgets(self):
+        # Header
+        tk.Label(self.dialog, text="🎮 Bienvenue dans Dofus Bot Hub!", 
+                font=('Segoe UI', 20, 'bold'),
+                bg=THEME['bg'], fg=THEME['text']).pack(pady=20)
+        
+        tk.Label(self.dialog, text="Configure les mises à jour automatiques (optionnel)", 
+                font=('Segoe UI', 11),
+                bg=THEME['bg'], fg=THEME['text2']).pack()
+        
+        # Frame principale
+        main = tk.Frame(self.dialog, bg=THEME['bg2'], padx=30, pady=20)
+        main.pack(fill='both', expand=True, padx=30, pady=20)
+        
+        # Instructions
+        instructions = """
+📋 Pour activer les mises à jour automatiques:
+
+1. Va sur github.com et crée un compte (gratuit)
+
+2. Crée un "Repository":
+   • Clique sur le "+" en haut à droite
+   • Clique sur "New repository"
+   • Nom: dofus-bots
+   • ⚠️ Coche "Public" !
+   • Clique "Create repository"
+
+3. Upload les fichiers du Hub sur ton repo
+
+4. Entre ton username GitHub ci-dessous:
+"""
+        
+        tk.Label(main, text=instructions, font=('Segoe UI', 10),
+                bg=THEME['bg2'], fg=THEME['text'], justify='left').pack(anchor='w')
+        
+        # Username entry
+        user_frame = tk.Frame(main, bg=THEME['bg2'])
+        user_frame.pack(fill='x', pady=10)
+        
+        tk.Label(user_frame, text="GitHub Username:", font=('Segoe UI', 11, 'bold'),
+                bg=THEME['bg2'], fg=THEME['text']).pack(side='left')
+        
+        self.user_entry = tk.Entry(user_frame, width=25, font=('Segoe UI', 12),
+                                   bg=THEME['bg3'], fg=THEME['text'],
+                                   insertbackground=THEME['text'])
+        self.user_entry.pack(side='left', padx=15)
+        self.user_entry.insert(0, self.config.data.get("github_user", ""))
+        
+        # Info
+        tk.Label(main, text="💡 Tu peux aussi faire ça plus tard dans les paramètres",
+                font=('Segoe UI', 9), bg=THEME['bg2'], fg=THEME['text2']).pack(pady=10)
+        
+        # Boutons
+        btn_frame = tk.Frame(self.dialog, bg=THEME['bg'])
+        btn_frame.pack(fill='x', padx=30, pady=15)
+        
+        tk.Button(btn_frame, text="⏭️ Passer (configurer plus tard)", 
+                 font=('Segoe UI', 10),
+                 bg=THEME['bg3'], fg=THEME['text'],
+                 command=self.skip, cursor='hand2').pack(side='left')
+        
+        tk.Button(btn_frame, text="✅ Sauvegarder et continuer", 
+                 font=('Segoe UI', 11, 'bold'),
+                 bg=THEME['success'], fg='white',
+                 command=self.save, cursor='hand2').pack(side='right')
+    
+    def save(self):
+        username = self.user_entry.get().strip()
+        self.config.data["github_user"] = username
+        self.config.data["first_run"] = False
+        self.config.save()
+        
+        self.dialog.destroy()
+        self.on_complete()
+    
+    def skip(self):
+        self.config.data["first_run"] = False
+        self.config.save()
+        
+        self.dialog.destroy()
+        self.on_complete()
+
+
+# ============================================================
 #                    INTERFACE GRAPHIQUE
 # ============================================================
 class HubGUI:
     def __init__(self):
         self.paths = PathManager()
-        self.updater = Updater(self.paths, self.update_log)
+        self.config = HubConfig()
+        self.updater = Updater(self.paths, self.config, self.update_log)
         self.update_available = None
         
         self.setup_window()
         self.create_widgets()
         
-        # Vérifier les mises à jour au démarrage
-        threading.Thread(target=self.check_updates_async, daemon=True).start()
+        # Premier lancement = assistant de config
+        if self.config.data.get("first_run", True):
+            self.root.after(500, self.show_setup_wizard)
+        else:
+            # Vérifier les mises à jour au démarrage
+            threading.Thread(target=self.check_updates_async, daemon=True).start()
     
     def run(self):
         self.root.mainloop()
+    
+    def show_setup_wizard(self):
+        SetupWizard(self.root, self.config, self.on_setup_complete)
+    
+    def on_setup_complete(self):
+        # Rafraîchir l'updater avec la nouvelle config
+        self.updater = Updater(self.paths, self.config, self.update_log)
+        # Vérifier les mises à jour
+        threading.Thread(target=self.check_updates_async, daemon=True).start()
     
     def setup_window(self):
         self.root = tk.Tk()
@@ -280,11 +443,10 @@ class HubGUI:
         self.version_label.pack(anchor='w')
         
         # Bouton mise à jour (caché par défaut)
-        self.update_btn = tk.Button(header, text="⬆️ MISE À JOUR DISPONIBLE", 
+        self.update_btn = tk.Button(header, text="⬆️ MISE À JOUR", 
                                     font=('Segoe UI', 10, 'bold'),
                                     bg=THEME['warning'], fg='black',
                                     command=self.do_update, cursor='hand2')
-        # Ne pas pack - sera affiché si mise à jour disponible
         
         # Status
         self.status_frame = tk.Frame(header, bg=THEME['bg2'])
@@ -314,7 +476,7 @@ class HubGUI:
         footer.pack(fill='x', side='bottom')
         footer.pack_propagate(False)
         
-        # Log area (petit)
+        # Log area
         self.log_label = tk.Label(footer, text="Prêt", font=('Segoe UI', 9),
                                   bg=THEME['bg2'], fg=THEME['text2'])
         self.log_label.pack(side='left', padx=20, pady=15)
@@ -331,7 +493,6 @@ class HubGUI:
     
     def create_bot_card(self, bot, index):
         """Crée une carte pour un bot"""
-        # Frame de la carte
         card = tk.Frame(self.bots_frame, bg=THEME['card'], padx=20, pady=15)
         card.pack(fill='x', pady=8)
         
@@ -341,6 +502,11 @@ class HubGUI:
             for child in card.winfo_children():
                 try:
                     child.config(bg=THEME['accent2'])
+                    for subchild in child.winfo_children():
+                        try:
+                            subchild.config(bg=THEME['accent2'])
+                        except:
+                            pass
                 except:
                     pass
         
@@ -349,6 +515,11 @@ class HubGUI:
             for child in card.winfo_children():
                 try:
                     child.config(bg=THEME['card'])
+                    for subchild in child.winfo_children():
+                        try:
+                            subchild.config(bg=THEME['card'])
+                        except:
+                            pass
                 except:
                     pass
         
@@ -379,7 +550,7 @@ class HubGUI:
                        command=lambda b=bot: self.launch_bot(b), cursor='hand2')
         btn.pack(side='right', padx=10)
         
-        # Status du bot (fichier existe?)
+        # Status du bot
         script_path = os.path.join(self.paths.base_dir, bot['script'])
         if os.path.exists(script_path):
             status_text = "✅ Installé"
@@ -404,7 +575,6 @@ class HubGUI:
         self.update_log(f"🚀 Lancement de {bot['name']}...")
         
         try:
-            # Lancer le bot avec pythonw (sans console)
             if sys.platform == 'win32':
                 subprocess.Popen(['pythonw', script_path], 
                                cwd=os.path.dirname(script_path),
@@ -421,7 +591,12 @@ class HubGUI:
     
     def check_updates_async(self):
         """Vérifie les mises à jour en arrière-plan"""
-        time.sleep(1)  # Petite pause pour laisser l'UI se charger
+        time.sleep(1)
+        
+        # Vérifier si GitHub est configuré
+        if not self.config.data.get("github_user"):
+            self.root.after(0, lambda: self.status_label.config(text="⚙️ GitHub non configuré"))
+            return
         
         update_info = self.updater.check_for_updates()
         
@@ -451,7 +626,6 @@ class HubGUI:
             self.update_log("📥 Mise à jour en cours...")
             self.update_btn.config(state='disabled', text="⏳ Mise à jour...")
             
-            # Lancer dans un thread
             threading.Thread(target=self._do_update_thread, daemon=True).start()
     
     def _do_update_thread(self):
@@ -462,7 +636,7 @@ class HubGUI:
             self.root.after(0, self._update_complete)
         else:
             self.root.after(0, lambda: messagebox.showerror("Erreur", "Échec de la mise à jour"))
-            self.root.after(0, lambda: self.update_btn.config(state='normal', text="⬆️ MISE À JOUR DISPONIBLE"))
+            self.root.after(0, lambda: self.update_btn.config(state='normal', text="⬆️ MISE À JOUR"))
     
     def _update_complete(self):
         """Mise à jour terminée"""
@@ -482,67 +656,93 @@ class HubGUI:
         """Ouvre les paramètres"""
         dialog = tk.Toplevel(self.root)
         dialog.title("⚙️ Paramètres")
-        dialog.geometry("500x400")
+        dialog.geometry("550x450")
         dialog.configure(bg=THEME['bg'])
         dialog.transient(self.root)
         dialog.grab_set()
         
         # Centre
         dialog.update_idletasks()
-        x = self.root.winfo_x() + (self.root.winfo_width() - 500) // 2
-        y = self.root.winfo_y() + (self.root.winfo_height() - 400) // 2
-        dialog.geometry(f"500x400+{x}+{y}")
+        x = self.root.winfo_x() + (self.root.winfo_width() - 550) // 2
+        y = self.root.winfo_y() + (self.root.winfo_height() - 450) // 2
+        dialog.geometry(f"550x450+{x}+{y}")
         
         tk.Label(dialog, text="⚙️ Paramètres", font=('Segoe UI', 18, 'bold'),
-                bg=THEME['bg'], fg=THEME['text']).pack(pady=20)
+                bg=THEME['bg'], fg=THEME['text']).pack(pady=15)
         
         # Frame contenu
-        content = tk.Frame(dialog, bg=THEME['bg2'], padx=20, pady=15)
+        content = tk.Frame(dialog, bg=THEME['bg2'], padx=25, pady=20)
         content.pack(fill='both', expand=True, padx=20, pady=10)
         
         # GitHub config
-        tk.Label(content, text="Configuration GitHub (pour les mises à jour)", 
-                font=('Segoe UI', 11, 'bold'),
-                bg=THEME['bg2'], fg=THEME['text']).pack(anchor='w', pady=(0, 10))
+        tk.Label(content, text="🔄 Configuration GitHub (mises à jour)", 
+                font=('Segoe UI', 12, 'bold'),
+                bg=THEME['bg2'], fg=THEME['text']).pack(anchor='w', pady=(0, 15))
         
         # Username
         row1 = tk.Frame(content, bg=THEME['bg2'])
-        row1.pack(fill='x', pady=5)
-        tk.Label(row1, text="Username:", width=12, anchor='w',
-                bg=THEME['bg2'], fg=THEME['text2']).pack(side='left')
-        user_entry = tk.Entry(row1, width=30, bg=THEME['bg3'], fg=THEME['text'])
-        user_entry.insert(0, GITHUB_USER)
+        row1.pack(fill='x', pady=8)
+        tk.Label(row1, text="Username GitHub:", width=15, anchor='w',
+                font=('Segoe UI', 10),
+                bg=THEME['bg2'], fg=THEME['text']).pack(side='left')
+        user_entry = tk.Entry(row1, width=25, font=('Segoe UI', 11),
+                             bg=THEME['bg3'], fg=THEME['text'],
+                             insertbackground=THEME['text'])
+        user_entry.insert(0, self.config.data.get("github_user", ""))
         user_entry.pack(side='left', padx=10)
         
         # Repo
         row2 = tk.Frame(content, bg=THEME['bg2'])
-        row2.pack(fill='x', pady=5)
-        tk.Label(row2, text="Repository:", width=12, anchor='w',
-                bg=THEME['bg2'], fg=THEME['text2']).pack(side='left')
-        repo_entry = tk.Entry(row2, width=30, bg=THEME['bg3'], fg=THEME['text'])
-        repo_entry.insert(0, GITHUB_REPO)
+        row2.pack(fill='x', pady=8)
+        tk.Label(row2, text="Nom du repo:", width=15, anchor='w',
+                font=('Segoe UI', 10),
+                bg=THEME['bg2'], fg=THEME['text']).pack(side='left')
+        repo_entry = tk.Entry(row2, width=25, font=('Segoe UI', 11),
+                             bg=THEME['bg3'], fg=THEME['text'],
+                             insertbackground=THEME['text'])
+        repo_entry.insert(0, self.config.data.get("github_repo", "dofus-bots"))
         repo_entry.pack(side='left', padx=10)
         
-        # Info
-        tk.Label(content, text="💡 Pour activer les mises à jour automatiques:\n"
-                              "1. Crée un repo GitHub public\n"
-                              "2. Mets ton username et repo ci-dessus\n"
-                              "3. Upload les fichiers du hub sur GitHub",
-                font=('Segoe UI', 9), bg=THEME['bg2'], fg=THEME['text2'],
-                justify='left').pack(anchor='w', pady=20)
+        # Aide
+        help_text = """
+💡 Comment ça marche:
+
+1. Crée un compte sur github.com (gratuit)
+2. Crée un repo public nommé "dofus-bots"  
+3. Upload tous les fichiers du Hub
+4. Entre ton username ci-dessus
+5. Quand tu fais une modif, upload les fichiers
+   → Tous les utilisateurs reçoivent la mise à jour !
+"""
+        tk.Label(content, text=help_text, font=('Segoe UI', 9),
+                bg=THEME['bg2'], fg=THEME['text2'], justify='left').pack(anchor='w', pady=10)
         
-        # Version info
-        tk.Label(content, text=f"Version actuelle: {self.updater.current_version}",
-                font=('Segoe UI', 10), bg=THEME['bg2'], fg=THEME['info']).pack(anchor='w')
+        # Infos
+        tk.Label(content, text=f"📂 Dossier: {self.paths.base_dir}",
+                font=('Segoe UI', 9), bg=THEME['bg2'], fg=THEME['info']).pack(anchor='w', pady=5)
         
-        # Dossier
-        tk.Label(content, text=f"Dossier: {self.paths.base_dir}",
-                font=('Segoe UI', 9), bg=THEME['bg2'], fg=THEME['text2']).pack(anchor='w', pady=5)
+        # Boutons
+        btn_frame = tk.Frame(dialog, bg=THEME['bg'])
+        btn_frame.pack(fill='x', padx=20, pady=15)
         
-        # Bouton fermer
-        tk.Button(dialog, text="Fermer", font=('Segoe UI', 10),
+        def save_settings():
+            self.config.data["github_user"] = user_entry.get().strip()
+            self.config.data["github_repo"] = repo_entry.get().strip() or "dofus-bots"
+            self.config.save()
+            
+            # Rafraîchir l'updater
+            self.updater = Updater(self.paths, self.config, self.update_log)
+            
+            messagebox.showinfo("Sauvegardé", "Paramètres sauvegardés!")
+            dialog.destroy()
+        
+        tk.Button(btn_frame, text="Annuler", font=('Segoe UI', 10),
                  bg=THEME['bg3'], fg=THEME['text'],
-                 command=dialog.destroy).pack(pady=15)
+                 command=dialog.destroy).pack(side='left')
+        
+        tk.Button(btn_frame, text="💾 Sauvegarder", font=('Segoe UI', 11, 'bold'),
+                 bg=THEME['success'], fg='white',
+                 command=save_settings).pack(side='right')
 
 
 # ============================================================
