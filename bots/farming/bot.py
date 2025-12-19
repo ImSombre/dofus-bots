@@ -65,9 +65,10 @@ def send_ntfy(topic, message):
         url = f"https://ntfy.sh/{topic}"
         data = message.encode('utf-8')
         req = urllib.request.Request(url, data=data)
-        req.add_header('Title', 'Dofus Farm Bot')
-        req.add_header('Tags', 'seedling')
-        urllib.request.urlopen(req, timeout=5)
+        req.add_header('Title', 'Dofus Bot')
+        req.add_header('Tags', 'envelope,warning')
+        req.add_header('Priority', 'high')
+        urllib.request.urlopen(req, timeout=10)
         return True
     except:
         return False
@@ -380,41 +381,28 @@ class BotEngine:
             return False
     
     def detect_combat(self, frame):
-        """Détecte le mode combat - STRICT pour éviter les faux positifs"""
+        """Détecte le mode combat - ULTRA STRICT pour éviter les faux positifs"""
         h, w = frame.shape[:2]
         
-        # Méthode principale: détecter le bouton "Auto Pass" en bas à droite
-        # C'est le plus fiable car ce bouton n'existe QUE en combat
-        bottom_area = frame[int(h*0.88):int(h*0.95), int(w*0.6):int(w*0.85)]
+        # SEULE méthode fiable: détecter la timeline de combat en haut
+        # C'est une barre verte qui n'existe QUE en combat
+        timeline_area = frame[5:50, int(w*0.3):int(w*0.7)]
         
-        if bottom_area.size > 0:
-            # Le bouton "Auto Pass" est orange vif
-            hsv = cv2.cvtColor(bottom_area, cv2.COLOR_BGR2HSV)
-            
-            # Orange spécifique du bouton Auto Pass
-            orange_mask = cv2.inRange(hsv, np.array([10, 150, 180]), np.array([25, 255, 255]))
-            orange_pixels = cv2.countNonZero(orange_mask)
-            
-            # Doit avoir assez de pixels orange pour être le bouton
-            if orange_pixels > 1500:
-                print(f"  ⚔️ Bouton combat détecté: {orange_pixels} pixels orange")
-                return True
+        if timeline_area.size == 0:
+            return False
         
-        # Méthode secondaire: cercles rouge ET bleu au sol (combat actif)
-        game_area = frame[int(h*0.05):int(h*0.70), :]
-        hsv = cv2.cvtColor(game_area, cv2.COLOR_BGR2HSV)
+        hsv = cv2.cvtColor(timeline_area, cv2.COLOR_BGR2HSV)
         
-        # Cercle rouge
-        mask1 = cv2.inRange(hsv, np.array([0, 120, 120]), np.array([10, 255, 255]))
-        mask2 = cv2.inRange(hsv, np.array([170, 120, 120]), np.array([180, 255, 255]))
-        red = cv2.countNonZero(cv2.bitwise_or(mask1, mask2))
+        # Vert très spécifique de la timeline Dofus
+        green_mask = cv2.inRange(hsv, np.array([45, 150, 150]), np.array([75, 255, 255]))
+        green_pixels = cv2.countNonZero(green_mask)
         
-        # Cercle bleu
-        blue = cv2.countNonZero(cv2.inRange(hsv, np.array([95, 120, 120]), np.array([115, 255, 255])))
+        total_pixels = timeline_area.shape[0] * timeline_area.shape[1]
+        ratio = green_pixels / total_pixels
         
-        # Les deux cercles doivent être présents
-        if red > 3000 and blue > 3000:
-            print(f"  ⚔️ Cercles combat détectés: rouge={red}, bleu={blue}")
+        # Doit avoir AU MOINS 5% de vert pour être en combat
+        if ratio > 0.05:
+            print(f"  ⚔️ Combat détecté: {ratio*100:.1f}% timeline verte")
             return True
         
         return False
@@ -472,11 +460,11 @@ class BotEngine:
         """Détecte les MP par template matching (image du texte 'de')"""
         h, w = frame.shape[:2]
         
-        # Zone du chat
-        chat_top = int(h * 0.75)
-        chat_bottom = int(h * 0.98)
+        # Zone du chat élargie
+        chat_top = int(h * 0.50)
+        chat_bottom = h
         chat_left = 0
-        chat_right = int(w * 0.50)
+        chat_right = int(w * 0.60)
         
         chat_area = frame[chat_top:chat_bottom, chat_left:chat_right]
         
@@ -488,7 +476,11 @@ class BotEngine:
             mp_template_path = os.path.join(self.config.script_dir, "mp_template.png")
             if os.path.exists(mp_template_path):
                 self._mp_template = cv2.imread(mp_template_path)
-                print(f"✅ Template MP chargé: {mp_template_path}")
+                if self._mp_template is not None:
+                    th, tw = self._mp_template.shape[:2]
+                    print(f"✅ Template MP chargé ({tw}x{th}px)")
+                else:
+                    self._mp_template = None
             else:
                 self._mp_template = None
         
@@ -500,16 +492,8 @@ class BotEngine:
             result = cv2.matchTemplate(chat_area, self._mp_template, cv2.TM_CCOEFF_NORMED)
             min_val, max_val, min_loc, max_loc = cv2.minMaxLoc(result)
             
-            # Debug
-            if not hasattr(self, '_mp_counter'):
-                self._mp_counter = 0
-            self._mp_counter += 1
-            
-            if self._mp_counter % 20 == 0:
-                print(f"  💬 MP Scan: score={max_val:.2f}")
-            
-            # Seuil de détection (0.7 = 70% de correspondance)
-            if max_val > 0.7:
+            # Seuil de détection (0.5 = 50% de correspondance)
+            if max_val > 0.5:
                 print(f"\n🚨🚨🚨 MP DÉTECTÉ! Score={max_val:.2f} 🚨🚨🚨\n")
                 return True
                 
@@ -521,25 +505,29 @@ class BotEngine:
     def capture_mp_template(self):
         """Capture le template du texte MP 'de NomJoueur'"""
         self.log("📸 Capture du template MP...")
-        self.log("⏳ 3 secondes pour sélectionner la zone...")
+        self.log("⏳ Place ta souris sur le 'de' cyan du MP...")
+        self.log("   3 secondes...")
         
-        time.sleep(3)
+        time.sleep(1)
+        self.log("   2...")
+        time.sleep(1)
+        self.log("   1...")
+        time.sleep(1)
         
         # Capturer l'écran
         screenshot = ImageGrab.grab()
         frame = np.array(screenshot)
         frame = cv2.cvtColor(frame, cv2.COLOR_RGB2BGR)
         
-        # Position de la souris = coin supérieur gauche
+        # Position de la souris
         x, y = pyautogui.position()
         
-        # Capturer une zone de 80x20 pixels autour du curseur
-        # (assez pour "de NomJoueur")
-        region_w, region_h = 100, 25
+        # Zone petite: juste "de" (40x20 pixels)
+        region_w, region_h = 40, 20
         
         y1 = max(0, y - 5)
         y2 = min(frame.shape[0], y + region_h)
-        x1 = max(0, x)
+        x1 = max(0, x - 5)
         x2 = min(frame.shape[1], x + region_w)
         
         template = frame[y1:y2, x1:x2]
@@ -551,9 +539,9 @@ class BotEngine:
             
             # Recharger le template
             self._mp_template = template
+            h, w = template.shape[:2]
             
-            self.log(f"✅ Template MP sauvegardé!")
-            self.log(f"   Fichier: {template_path}")
+            self.log(f"✅ Template MP sauvegardé! ({w}x{h}px)")
             return True
         else:
             self.log("❌ Erreur capture template")
@@ -570,8 +558,8 @@ class BotEngine:
         self.running = False
         self.paused = True
         
-        # Envoyer notification (Discord + Ntfy)
-        message = "ALERTE MP DOFUS - Un message prive a ete recu! Bot arrete."
+        # Envoyer notification simple (Discord + Ntfy)
+        message = "📩 MP recu sur Dofus! Le bot s'est arrete."
         send_notification(self.config.data, message)
         self.log("📱 Notification envoyee!")
     
