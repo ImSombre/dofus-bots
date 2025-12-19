@@ -15,7 +15,7 @@ echo.
 :: ============================================
 :: ETAPE 1: Verifier Python
 :: ============================================
-echo [1/3] Verification de Python...
+echo [1/4] Verification de Python...
 echo.
 
 python --version >nul 2>&1
@@ -71,15 +71,15 @@ if %errorlevel% neq 0 (
 :: ============================================
 :: ETAPE 2: Mettre a jour pip
 :: ============================================
-echo [2/3] Mise a jour de pip...
+echo [2/4] Mise a jour de pip...
 python -m pip install --upgrade pip >nul 2>&1
 echo      [OK] pip mis a jour!
 echo.
 
 :: ============================================
-:: ETAPE 3: Installer les dependances
+:: ETAPE 3: Installer les dependances Python
 :: ============================================
-echo [3/3] Installation des dependances...
+echo [3/4] Installation des dependances Python...
 echo.
 
 :: Dependances principales
@@ -111,6 +111,59 @@ echo      [*] pynput...
 pip install pynput --quiet 2>nul
 echo          [OK]
 
+echo      [*] pytesseract (OCR)...
+pip install pytesseract --quiet 2>nul
+echo          [OK]
+
+echo.
+
+:: ============================================
+:: ETAPE 4: Installer Tesseract OCR
+:: ============================================
+echo [4/4] Installation de Tesseract OCR (pour Travel Bot)...
+echo.
+
+:: Verifier si Tesseract est deja installe
+if exist "C:\Program Files\Tesseract-OCR\tesseract.exe" (
+    echo      [OK] Tesseract OCR est deja installe!
+    echo.
+) else (
+    echo      [*] Telechargement de Tesseract OCR...
+    echo          Cela peut prendre quelques minutes...
+    echo.
+    
+    :: Telecharger Tesseract (version 5.3.3 - stable)
+    powershell -Command "& {[Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12; Invoke-WebRequest -Uri 'https://github.com/UB-Mannheim/tesseract/releases/download/v5.3.3/tesseract-ocr-w64-setup-5.3.3.20231005.exe' -OutFile 'tesseract_installer.exe'}"
+    
+    if exist tesseract_installer.exe (
+        echo      [*] Installation de Tesseract OCR...
+        echo          Installation silencieuse en cours...
+        echo.
+        
+        :: Installation silencieuse
+        start /wait tesseract_installer.exe /S
+        
+        :: Supprimer l'installeur
+        del tesseract_installer.exe 2>nul
+        
+        :: Verifier l'installation
+        if exist "C:\Program Files\Tesseract-OCR\tesseract.exe" (
+            echo      [OK] Tesseract OCR installe!
+            echo.
+        ) else (
+            echo      [!] Installation Tesseract echouee.
+            echo          Le Travel Bot fonctionnera sans OCR.
+            echo          Tu peux entrer ta position manuellement.
+            echo.
+        )
+    ) else (
+        echo      [!] Telechargement Tesseract echoue.
+        echo          Le Travel Bot fonctionnera sans OCR.
+        echo          Tu peux l'installer manuellement plus tard.
+        echo.
+    )
+)
+
 echo.
 echo  ╔═══════════════════════════════════════════════════════╗
 echo  ║                                                       ║
@@ -118,6 +171,12 @@ echo  ║        ✅ INSTALLATION TERMINEE !                    ║
 echo  ║                                                       ║
 echo  ║        Pour lancer le Hub:                           ║
 echo  ║        → Double-clic sur "Lancer_Hub.vbs"            ║
+echo  ║                                                       ║
+echo  ║        Dependances installees:                        ║
+echo  ║        • Python + pip                                 ║
+echo  ║        • OpenCV, NumPy, PyAutoGUI                    ║
+echo  ║        • Pillow, Keyboard, Requests                  ║
+echo  ║        • Tesseract OCR (pour Travel Bot)             ║
 echo  ║                                                       ║
 echo  ╚═══════════════════════════════════════════════════════╝
 echo.
