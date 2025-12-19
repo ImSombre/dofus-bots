@@ -1,5 +1,5 @@
 {
-    "version": "1.6.0",
+    "version": "1.5.1",
     "changelog": "Hub: Redémarrage auto après mise à jour | Travel Bot v3.2: Instructions OCR",
     "files": [
         {"path": "hub.py"},
