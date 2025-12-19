@@ -376,19 +376,21 @@ class HubGUI:
         vbs_path = os.path.join(self.config.base_dir, "Lancer_Hub.vbs")
         
         if os.path.exists(vbs_path):
-            messagebox.showinfo("✅ Mise à jour", "Mise à jour installée!\n\nLe Hub va redémarrer...")
+            result = messagebox.showinfo("✅ Mise à jour", "Mise à jour installée!\n\nClique OK pour redémarrer le Hub.")
             
             # Lancer le VBS
             try:
-                subprocess.Popen(['wscript', vbs_path], shell=True)
+                os.startfile(vbs_path)
             except:
                 try:
-                    os.startfile(vbs_path)
+                    subprocess.Popen(['wscript', vbs_path], shell=True)
                 except:
                     pass
             
-            # Fermer le hub actuel
-            self.root.after(500, self.root.destroy)
+            # Forcer la fermeture
+            self.root.quit()
+            self.root.destroy()
+            sys.exit(0)
         else:
             # Pas de VBS, proposer de redémarrer manuellement
             messagebox.showinfo("✅ Mise à jour", "Mise à jour installée!\n\nRedémarre le Hub manuellement.")
