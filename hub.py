@@ -366,13 +366,32 @@ class HubGUI:
         success = self.updater.download_update(self.update_available)
         if success:
             self.root.after(0, lambda: self.update_btn.pack_forget())
-            self.root.after(0, lambda: messagebox.showinfo("✅ Mise à jour",
-                "Mise à jour installée!\n\nRedémarre le Hub pour appliquer."))
+            self.root.after(0, self._restart_hub)
         else:
             self.root.after(0, lambda: self.update_btn.config(state='normal', text="⬆️ Réessayer"))
+    
+    def _restart_hub(self):
+        """Redémarre le hub via Lancer_Hub.vbs"""
+        # Chercher Lancer_Hub.vbs
+        vbs_path = os.path.join(self.config.base_dir, "Lancer_Hub.vbs")
         
-        self.setup_window()
-        self.create_widgets()
+        if os.path.exists(vbs_path):
+            messagebox.showinfo("✅ Mise à jour", "Mise à jour installée!\n\nLe Hub va redémarrer...")
+            
+            # Lancer le VBS
+            try:
+                subprocess.Popen(['wscript', vbs_path], shell=True)
+            except:
+                try:
+                    os.startfile(vbs_path)
+                except:
+                    pass
+            
+            # Fermer le hub actuel
+            self.root.after(500, self.root.destroy)
+        else:
+            # Pas de VBS, proposer de redémarrer manuellement
+            messagebox.showinfo("✅ Mise à jour", "Mise à jour installée!\n\nRedémarre le Hub manuellement.")
     
     def run(self):
         self.root.mainloop()
