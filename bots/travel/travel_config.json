@@ -1,0 +1,31 @@
+{
+  "click_positions": {
+    "right": {
+      "x": 95,
+      "y": 50
+    },
+    "left": {
+      "x": 5,
+      "y": 50
+    },
+    "up": {
+      "x": 50,
+      "y": 5
+    },
+    "down": {
+      "x": 50,
+      "y": 95
+    }
+  },
+  "move_delay": 4.0,
+  "zaap_delay": 2.0,
+  "pos_region": {
+    "x1": 0,
+    "y1": 0,
+    "x2": 200,
+    "y2": 50
+  },
+  "known_zaaps": [],
+  "favorites": [],
+  "resolution": "1920x1080"
+}
