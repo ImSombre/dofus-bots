@@ -1,6 +1,6 @@
 {
-    "version": "1.5.0",
-    "changelog": "Travel Bot v3.0 - 100% automatique avec OCR et Zaaps auto",
+    "version": "1.3.0",
+    "changelog": "Hub: Redémarrage auto après mise à jour | Travel Bot v3.2: Instructions OCR",
     "files": [
         {"path": "hub.py"},
         {"path": "version.json"},

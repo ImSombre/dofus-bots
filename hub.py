@@ -70,7 +70,7 @@ class HubConfig:
 
 
 # Version locale
-LOCAL_VERSION = "1.2.0"
+LOCAL_VERSION = "1.3.0"
 
 # ============================================================
 #                    THÈME
@@ -242,11 +242,35 @@ class Updater:
             self.current_version = new_version
             
             self.log(f"✅ Mise à jour {new_version} installée!")
+            self.log(f"🔄 Redémarrage dans 3 secondes...")
+            
+            # Redémarrer le Hub
+            threading.Thread(target=self._restart_hub, daemon=True).start()
+            
             return True
             
         except Exception as e:
             self.log(f"❌ Erreur mise à jour: {e}")
             return False
+    
+    def _restart_hub(self):
+        """Redémarre le Hub après mise à jour"""
+        time.sleep(3)
+        
+        # Chemin du script actuel
+        script_path = os.path.abspath(__file__)
+        python_exe = sys.executable
+        
+        # Lancer une nouvelle instance
+        if sys.platform == 'win32':
+            # Windows: utiliser pythonw pour éviter la console
+            subprocess.Popen([python_exe, script_path], 
+                           creationflags=subprocess.CREATE_NEW_CONSOLE)
+        else:
+            subprocess.Popen([python_exe, script_path])
+        
+        # Fermer cette instance
+        os._exit(0)
 
 
 # ============================================================
@@ -275,7 +299,7 @@ BOTS = [
         "id": "travel",
         "name": "🗺️ Travel Bot",
         "description": "Déplacement automatique intelligent\nPathfinding A* • Zaaps • Chemin optimal",
-        "version": "3.0",
+        "version": "3.2",
         "script": "bots/travel/bot_travel.py",
         "color": "#4cc9f0",
         "icon": "🗺️"
