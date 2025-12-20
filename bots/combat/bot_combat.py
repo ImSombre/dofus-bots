@@ -508,7 +508,7 @@ class CombatGUI:
     
     def setup_window(self):
         self.root = tk.Tk()
-        self.root.title("🗡️ Dofus Combat Bot v2.0")
+        self.root.title("🗡️ Dofus Combat Bot - By ImSombre")
         self.root.geometry("780x520")
         self.root.configure(bg=self.colors['bg'])
         self.root.resizable(True, True)
