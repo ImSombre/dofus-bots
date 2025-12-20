@@ -1,5 +1,5 @@
 {
-    "version": "2.1.7",
+    "version": "2.1.2",
     "changelog": "Hub: Redemarrage auto apres MAJ | Travel Bot v3.3",
     "files": [
         {"path": "hub.py"},
@@ -8,6 +8,7 @@
         {"path": "requirements.txt"},
         {"path": "bots/farming/bot.py"},
         {"path": "bots/combat/bot_combat.py"},
-        {"path": "bots/outils.py"},
+        {"path": "bots/combat/vote.py"},
+        {"path": "bots/outils.py"}
     ]
 }
