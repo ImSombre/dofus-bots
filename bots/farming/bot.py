@@ -793,7 +793,7 @@ class BotGUI:
     
     def setup_window(self):
         self.root = tk.Tk()
-        self.root.title("🌾 Dofus Farming Bot v6.0 - by Dylan")
+        self.root.title("🌾 Dofus Farming Bot - by ImSombre")
         self.root.geometry("950x800")
         self.root.configure(bg=THEME['bg'])
         self.root.resizable(True, True)
