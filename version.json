@@ -8,7 +8,6 @@
         {"path": "requirements.txt"},
         {"path": "bots/farming/bot.py"},
         {"path": "bots/combat/bot_combat.py"},
-        {"path": "bots/vote.py"},
         {"path": "bots/outils.py"}
     ]
 }
