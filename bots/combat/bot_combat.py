@@ -652,8 +652,7 @@ class CombatGUI:
         self.combat_load_delay_var = tk.StringVar(value=str(self.config.data.get("combat", {}).get("combat_load_delay", 2.0)))
         tk.Spinbox(row2, from_=0.5, to=10.0, increment=0.5, width=5,
                   textvariable=self.combat_load_delay_var, command=self.save_params).pack(side='right')
-               
- # Checkbox: Replay avec/sans délais         row4 = tk.Frame(param_frame, bg=self.colors['bg2'])         row4.pack(fill='x', pady=5)         self.use_delays_var = tk.BooleanVar(value=self.config.data.get("combat", {}).get("use_recorded_delays", True))         tk.Checkbutton(row4, text="⏱️ Replay avec délais", variable=self.use_delays_var,                       bg=self.colors['bg2'], fg=self.colors['text'], selectcolor=self.colors['bg3'],                       activebackground=self.colors['bg2'], activeforeground=self.colors['text'],                       font=('Segoe UI', 9), command=self.save_params).pack(side='left')         tk.Label(row4, text="⚡", font=('Segoe UI', 10),                 bg=self.colors['bg2'], fg=self.colors['warning']).pack(side='right')
+        
         # Mode auto/manuel
         row3 = tk.Frame(param_frame, bg=self.colors['bg2'])
         row3.pack(fill='x', pady=5)
