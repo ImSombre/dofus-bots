@@ -108,7 +108,8 @@ class Config:
                 "search_delay": 2.0,       # Délai recherche mob
                 "action_delay": 0.3,       # Délai entre actions (mode rapide)
                 "combat_load_delay": 2.0,  # Délai avant replay
-                "use_recorded_delays": True # True=avec délais, False=rapide
+                "use_recorded_delays": True, # True=avec délais, False=rapide
+                "auto_attack": True        # True=auto, False=manuel
             },
             "mob_templates": [],
             "hotkeys": {
@@ -329,9 +330,22 @@ class CombatEngine:
     
     def attack_mob(self, pos):
         """Attaque un mob avec CLIC DROIT"""
-        self.log(f"🎯 Attaque mob à ({pos[0]}, {pos[1]}) - Clic droit")
+        self.log(f"🎯 Mob trouvé à ({pos[0]}, {pos[1]})")
+        
+        # Écrire .movemobs d'abord
+        self.log("📝 Commande: .movemobs")
+        if HAS_KEYBOARD:
+            keyboard.write('.movemobs')
+        else:
+            pyautogui.typewrite('.movemobs', interval=0.02)
+        time.sleep(0.1)
+        pyautogui.press('enter')
+        
+        # Attendre après la commande
+        time.sleep(0.3)
         
         # CLIC DROIT pour attaquer
+        self.log(f"🖱️ Clic droit sur mob")
         pyautogui.click(pos[0], pos[1], button='right')
         time.sleep(0.5)
         
@@ -422,7 +436,16 @@ class CombatEngine:
         """Boucle principale"""
         self.running = True
         self.stats["start_time"] = datetime.now()
-        self.log("🚀 Bot de combat démarré!")
+        
+        auto_attack = self.config.data.get("combat", {}).get("auto_attack", True)
+        
+        if auto_attack:
+            self.log("🚀 Bot démarré (MODE AUTO)")
+            self.log("   Recherche de mobs activée")
+        else:
+            self.log("🚀 Bot démarré (MODE MANUEL)")
+            self.log("   Lance le combat toi-même!")
+            self.log("   Le bot fera le replay automatiquement")
         
         actions = self.config.data.get("recorded_actions", [])
         if not actions:
@@ -444,14 +467,18 @@ class CombatEngine:
                     self.handle_combat()
                     continue
                 
-                # Chercher un mob
-                mob = self.detect_mob(frame)
-                
-                if mob:
-                    self.log(f"👾 Mob trouvé! (score={mob[2]:.2f})")
-                    self.attack_mob((mob[0], mob[1]))
+                # Mode AUTO: chercher un mob
+                if auto_attack:
+                    mob = self.detect_mob(frame)
+                    
+                    if mob:
+                        self.log(f"👾 Mob trouvé! (score={mob[2]:.2f})")
+                        self.attack_mob((mob[0], mob[1]))
+                    else:
+                        time.sleep(search_delay)
                 else:
-                    time.sleep(search_delay)
+                    # Mode MANUEL: juste attendre le combat
+                    time.sleep(0.5)
                 
             except Exception as e:
                 self.log(f"❌ Erreur: {e}")
@@ -489,7 +516,7 @@ class CombatGUI:
     def setup_window(self):
         self.root = tk.Tk()
         self.root.title("🗡️ Dofus Combat Bot v2.0 - Record & Replay")
-        self.root.geometry("850x750")
+        self.root.geometry("1050x850")
         self.root.configure(bg=self.colors['bg'])
         self.root.resizable(True, True)
     
@@ -543,7 +570,7 @@ class CombatGUI:
         main.pack(fill='both', expand=True, padx=10, pady=5)
         
         # Left panel
-        left = tk.Frame(main, bg=self.colors['bg2'], width=380)
+        left = tk.Frame(main, bg=self.colors['bg2'], width=420)
         left.pack(side='left', fill='y', padx=(0,5), pady=5)
         left.pack_propagate(False)
         
@@ -607,7 +634,7 @@ class CombatGUI:
         
         # Liste des mobs
         self.mob_listbox = tk.Listbox(left, bg=self.colors['bg'], fg=self.colors['text'],
-                                      font=('Consolas', 10), height=4,
+                                      font=('Consolas', 10), height=6,
                                       selectbackground=self.colors['accent'])
         self.mob_listbox.pack(fill='x', padx=10, pady=5)
         self.refresh_mob_list()
@@ -648,7 +675,17 @@ class CombatGUI:
         tk.Spinbox(row3, from_=0.5, to=10.0, increment=0.5, width=5,
                   textvariable=self.combat_load_delay_var, command=self.save_params).pack(side='right')
         
-
+        # Mode auto/manuel
+        row5 = tk.Frame(param_frame, bg=self.colors['bg2'])
+        row5.pack(fill='x', pady=5)
+        self.auto_attack_var = tk.BooleanVar(value=self.config.data.get("combat", {}).get("auto_attack", True))
+        tk.Checkbutton(row5, text="🤖 Attaque auto (cherche mobs)", variable=self.auto_attack_var,
+                      bg=self.colors['bg2'], fg=self.colors['text'], selectcolor=self.colors['bg3'],
+                      activebackground=self.colors['bg2'], activeforeground=self.colors['text'],
+                      font=('Segoe UI', 9), command=self.save_params).pack(side='left')
+        tk.Label(row5, text="(décoché = manuel)", font=('Segoe UI', 8),
+                bg=self.colors['bg2'], fg=self.colors['text2']).pack(side='right')
+        
         # ===== RIGHT PANEL - LOG =====
         right = tk.Frame(main, bg=self.colors['bg2'])
         right.pack(side='right', fill='both', expand=True, padx=(5,0), pady=5)
@@ -902,6 +939,7 @@ class CombatGUI:
             self.config.data["combat"]["action_delay"] = float(self.action_delay_var.get())
             self.config.data["combat"]["combat_load_delay"] = float(self.combat_load_delay_var.get())
             self.config.data["combat"]["use_recorded_delays"] = self.use_delays_var.get()
+            self.config.data["combat"]["auto_attack"] = self.auto_attack_var.get()
             self.config.save()
         except:
             pass
