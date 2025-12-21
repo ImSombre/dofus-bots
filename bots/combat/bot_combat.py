@@ -106,9 +106,7 @@ class Config:
             "recorded_actions": [],  # Actions enregistrées
             "combat": {
                 "search_delay": 2.0,       # Délai recherche mob
-                "action_delay": 0.3,       # Délai entre actions (mode rapide)
                 "combat_load_delay": 2.0,  # Délai avant replay
-                "use_recorded_delays": True, # True=avec délais, False=rapide
                 "auto_attack": True        # True=auto, False=manuel
             },
             "mob_templates": [],
@@ -354,22 +352,16 @@ class CombatEngine:
         time.sleep(3)
     
     def replay_actions(self):
-        """Rejoue les actions enregistrées"""
+        """Rejoue les actions enregistrées avec les délais"""
         actions = self.config.data.get("recorded_actions", [])
         
         if not actions:
             self.log("⚠️ Aucune action enregistrée!")
             return
         
-        use_delays = self.config.data.get("combat", {}).get("use_recorded_delays", True)
-        action_delay = self.config.data.get("combat", {}).get("action_delay", 0.3)
-        
-        if use_delays:
-            self.log(f"▶️ Replay {len(actions)} actions (AVEC délais)...")
-            if actions:
-                self.log(f"   Durée: {actions[-1]['time']:.1f}s")
-        else:
-            self.log(f"⚡ Replay {len(actions)} actions (RAPIDE)...")
+        self.log(f"▶️ Replay {len(actions)} actions...")
+        if actions:
+            self.log(f"   Durée: {actions[-1]['time']:.1f}s")
         
         start_replay = time.time()
         
@@ -377,17 +369,12 @@ class CombatEngine:
             if not self.running or self.paused:
                 break
             
-            if use_delays:
-                # AVEC délais - timing exact
-                target_time = action["time"]
-                elapsed = time.time() - start_replay
-                wait_time = target_time - elapsed
-                if wait_time > 0:
-                    time.sleep(wait_time)
-            else:
-                # SANS délais - rapide
-                if i > 0:
-                    time.sleep(action_delay)
+            # Timing exact comme enregistré
+            target_time = action["time"]
+            elapsed = time.time() - start_replay
+            wait_time = target_time - elapsed
+            if wait_time > 0:
+                time.sleep(wait_time)
             
             # Exécuter l'action
             if action["type"] == "click":
@@ -657,33 +644,24 @@ class CombatGUI:
         tk.Spinbox(row1, from_=0.5, to=10.0, increment=0.5, width=5,
                   textvariable=self.search_delay_var, command=self.save_params).pack(side='right')
         
-        # Délai entre actions (mode rapide)
+        # Délai chargement combat
         row2 = tk.Frame(param_frame, bg=self.colors['bg2'])
         row2.pack(fill='x', pady=2)
-        tk.Label(row2, text="Entre actions:", font=('Segoe UI', 9),
-                bg=self.colors['bg2'], fg=self.colors['text2']).pack(side='left')
-        self.action_delay_var = tk.StringVar(value=str(self.config.data.get("combat", {}).get("action_delay", 0.3)))
-        tk.Spinbox(row2, from_=0.1, to=2.0, increment=0.1, width=5,
-                  textvariable=self.action_delay_var, command=self.save_params).pack(side='right')
-        
-        # Délai chargement combat
-        row3 = tk.Frame(param_frame, bg=self.colors['bg2'])
-        row3.pack(fill='x', pady=2)
-        tk.Label(row3, text="Chargement combat:", font=('Segoe UI', 9),
+        tk.Label(row2, text="Chargement combat:", font=('Segoe UI', 9),
                 bg=self.colors['bg2'], fg=self.colors['text2']).pack(side='left')
         self.combat_load_delay_var = tk.StringVar(value=str(self.config.data.get("combat", {}).get("combat_load_delay", 2.0)))
-        tk.Spinbox(row3, from_=0.5, to=10.0, increment=0.5, width=5,
+        tk.Spinbox(row2, from_=0.5, to=10.0, increment=0.5, width=5,
                   textvariable=self.combat_load_delay_var, command=self.save_params).pack(side='right')
         
         # Mode auto/manuel
-        row5 = tk.Frame(param_frame, bg=self.colors['bg2'])
-        row5.pack(fill='x', pady=5)
+        row3 = tk.Frame(param_frame, bg=self.colors['bg2'])
+        row3.pack(fill='x', pady=5)
         self.auto_attack_var = tk.BooleanVar(value=self.config.data.get("combat", {}).get("auto_attack", True))
-        tk.Checkbutton(row5, text="🤖 Attaque auto (cherche mobs)", variable=self.auto_attack_var,
+        tk.Checkbutton(row3, text="🤖 Attaque auto (cherche mobs)", variable=self.auto_attack_var,
                       bg=self.colors['bg2'], fg=self.colors['text'], selectcolor=self.colors['bg3'],
                       activebackground=self.colors['bg2'], activeforeground=self.colors['text'],
                       font=('Segoe UI', 9), command=self.save_params).pack(side='left')
-        tk.Label(row5, text="(décoché = manuel)", font=('Segoe UI', 8),
+        tk.Label(row3, text="(décoché = manuel)", font=('Segoe UI', 8),
                 bg=self.colors['bg2'], fg=self.colors['text2']).pack(side='right')
         
         # ===== RIGHT PANEL - LOG =====
@@ -936,9 +914,7 @@ class CombatGUI:
             if "combat" not in self.config.data:
                 self.config.data["combat"] = {}
             self.config.data["combat"]["search_delay"] = float(self.search_delay_var.get())
-            self.config.data["combat"]["action_delay"] = float(self.action_delay_var.get())
             self.config.data["combat"]["combat_load_delay"] = float(self.combat_load_delay_var.get())
-            self.config.data["combat"]["use_recorded_delays"] = self.use_delays_var.get()
             self.config.data["combat"]["auto_attack"] = self.auto_attack_var.get()
             self.config.save()
         except:
@@ -1016,6 +992,9 @@ class CombatGUI:
     
     def start_bot(self):
         """Démarre le bot"""
+        # Sauvegarder les params d'abord
+        self.save_params()
+        
         actions = self.config.data.get("recorded_actions", [])
         if not actions:
             messagebox.showwarning("Attention", 
@@ -1026,12 +1005,16 @@ class CombatGUI:
                 "4. Puis lance le bot")
             return
         
-        mob_dir = os.path.join(self.config.script_dir, "mobs")
-        has_mobs = os.path.exists(mob_dir) and any(f.endswith('.png') for f in os.listdir(mob_dir))
+        # Vérifier les mobs SEULEMENT en mode auto
+        auto_attack = self.config.data.get("combat", {}).get("auto_attack", True)
         
-        if not has_mobs:
-            messagebox.showwarning("Attention", "Capture d'abord un mob avec 📸 Capturer mob")
-            return
+        if auto_attack:
+            mob_dir = os.path.join(self.config.script_dir, "mobs")
+            has_mobs = os.path.exists(mob_dir) and any(f.endswith('.png') for f in os.listdir(mob_dir))
+            
+            if not has_mobs:
+                messagebox.showwarning("Attention", "Capture d'abord un mob avec 📸 Capturer mob\n\nOu décoche 'Attaque auto' pour le mode manuel")
+                return
         
         self.log("⏳ Démarrage dans 3 secondes...")
         self.status_label.config(text="⏳ Démarrage...", fg=self.colors['warning'])
