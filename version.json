@@ -1,5 +1,5 @@
 {
-    "version": "2.3.5",
+    "version": "2.3.6",
     "changelog": "Hub: Redemarrage auto apres MAJ | Travel Bot v3.3",
     "files": [
         {"path": "hub.py"},
