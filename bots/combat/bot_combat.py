@@ -389,18 +389,24 @@ class CombatEngine:
             return
         
         action_delay = self.config.data.get("combat", {}).get("action_delay", 0.3)
+        use_delays = self.config.data.get("combat", {}).get("use_recorded_delays", True)
         
-        self.log(f"🔄 Replay de {len(actions)} actions...")
+        if use_delays:
+            self.log(f"🔄 Replay de {len(actions)} actions (avec délais)...")
+        else:
+            self.log(f"🔄 Replay de {len(actions)} actions (SANS délais)...")
         
         last_time = 0
         for action in actions:
             if not self.running or self.paused:
                 break
             
-            delay = action["time"] - last_time
-            if delay > 0:
-                time.sleep(min(delay, 2.0))
-            last_time = action["time"]
+            # Délai entre actions (seulement si activé)
+            if use_delays:
+                delay = action["time"] - last_time
+                if delay > 0:
+                    time.sleep(min(delay, 2.0))
+                last_time = action["time"]
             
             if action["type"] == "click":
                 pyautogui.click(action["x"], action["y"])
@@ -408,6 +414,7 @@ class CombatEngine:
             elif action["type"] == "key":
                 press_key(action["key"])
             
+            # Petit délai minimum pour éviter les bugs (même sans délais)
             time.sleep(action_delay)
         
         self.log("✅ Replay terminé")
@@ -655,6 +662,18 @@ class CombatGUI:
         tk.Spinbox(r2, from_=0.1, to=2.0, increment=0.1, width=5, textvariable=self.action_delay_var,
                   command=self.save_params).pack(side='right')
         
+        # Checkbox pour utiliser les délais enregistrés
+        r3 = tk.Frame(param_f, bg=self.colors['bg2'])
+        r3.pack(fill='x', pady=3)
+        self.use_delays_var = tk.BooleanVar(value=self.config.data.get("combat", {}).get("use_recorded_delays", True))
+        tk.Checkbutton(r3, text="Rejouer avec délais", variable=self.use_delays_var,
+                      bg=self.colors['bg2'], fg=self.colors['text'], selectcolor=self.colors['bg3'],
+                      activebackground=self.colors['bg2'], activeforeground=self.colors['text'],
+                      command=self.toggle_use_delays).pack(side='left')
+        
+        tk.Label(r3, text="⚡", font=('Segoe UI', 10), bg=self.colors['bg2'], 
+                fg=self.colors['warning']).pack(side='right')
+        
         # RIGHT: Log
         right = tk.Frame(main, bg=self.colors['bg2'])
         right.pack(side='right', fill='both', expand=True)
@@ -801,6 +820,16 @@ class CombatGUI:
             self.config.save()
         except:
             pass
+    
+    def toggle_use_delays(self):
+        """Active/désactive les délais enregistrés lors du replay"""
+        self.config.data.setdefault("combat", {})["use_recorded_delays"] = self.use_delays_var.get()
+        self.config.save()
+        
+        if self.use_delays_var.get():
+            self.log("⏱️ Replay AVEC délais enregistrés")
+        else:
+            self.log("⚡ Replay SANS délais (rapide)")
     
     def toggle_mp_detection(self):
         self.config.data["mp_detection"] = self.mp_detection_var.get()
