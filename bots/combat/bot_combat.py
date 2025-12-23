@@ -63,6 +63,18 @@ def send_discord(webhook_url, message):
 
 
 # ============================================================
+#                    ADMIN CHECK
+# ============================================================
+def is_admin():
+    """Vérifie si le script tourne en admin"""
+    try:
+        import ctypes
+        return ctypes.windll.shell32.IsUserAnAdmin()
+    except:
+        return False
+
+
+# ============================================================
 #                    THEME
 # ============================================================
 THEME = {
@@ -105,9 +117,12 @@ class Config:
         return {
             "recorded_actions": [],  # Actions enregistrées
             "combat": {
-                "search_delay": 2.0,       # Délai recherche mob
-                "combat_load_delay": 2.0,  # Délai avant replay
-                "auto_attack": True        # True=auto, False=manuel
+                "search_delay": 2.0,        # Délai recherche mob
+                "action_delay": 0.3,        # Délai entre actions (mode rapide)
+                "combat_load_delay": 2.0,   # Délai avant replay
+                "use_recorded_delays": True, # True=timing exact, False=délai fixe
+                "auto_attack": True,        # True=auto, False=manuel
+                "use_movemobs": False       # True=envoie .movemobs avant clic
             },
             "mob_templates": [],
             "hotkeys": {
@@ -142,7 +157,7 @@ class ActionRecorder:
         self.actions = []
         self.start_time = None
         self.mouse_listener = None
-        self.keyboard_listener = None
+        self.keyboard_hook = None
     
     def log(self, msg):
         print(f"[REC] {msg}")
@@ -159,17 +174,22 @@ class ActionRecorder:
         self.log("   Fais ton combat normalement!")
         self.log("   Appuie sur F8 pour arrêter")
         
-        # Listener souris
+        # Listener souris avec pynput
         self.mouse_listener = mouse.Listener(
             on_click=self.on_mouse_click
         )
         self.mouse_listener.start()
         
-        # Listener clavier
-        self.keyboard_listener = pynput_keyboard.Listener(
-            on_press=self.on_key_press
-        )
-        self.keyboard_listener.start()
+        # Listener clavier avec keyboard (meilleure compatibilité jeux)
+        if HAS_KEYBOARD:
+            try:
+                self.keyboard_hook = keyboard.on_press(self.on_key_press_kb)
+            except:
+                # Fallback sur pynput
+                self.keyboard_listener = pynput_keyboard.Listener(
+                    on_press=self.on_key_press
+                )
+                self.keyboard_listener.start()
     
     def stop_recording(self):
         """Arrête l'enregistrement"""
@@ -177,7 +197,15 @@ class ActionRecorder:
         
         if self.mouse_listener:
             self.mouse_listener.stop()
-        if self.keyboard_listener:
+        
+        # Arrêter le hook keyboard
+        if HAS_KEYBOARD and self.keyboard_hook:
+            try:
+                keyboard.unhook(self.keyboard_hook)
+            except:
+                pass
+        
+        if hasattr(self, 'keyboard_listener') and self.keyboard_listener:
             self.keyboard_listener.stop()
         
         self.log(f"⏹️ ENREGISTREMENT TERMINÉ")
@@ -194,7 +222,7 @@ class ActionRecorder:
         
         action = {
             "type": "click",
-            "time": round(elapsed, 3),  # Précision milliseconde
+            "time": round(elapsed, 3),
             "x": x,
             "y": y,
             "button": "right" if button == mouse.Button.right else "left"
@@ -204,14 +232,34 @@ class ActionRecorder:
         btn_name = "DROIT" if action["button"] == "right" else "gauche"
         self.log(f"  🖱️ +{elapsed:.2f}s Clic {btn_name} ({x}, {y})")
     
+    def on_key_press_kb(self, event):
+        """Capture une touche (version keyboard module)"""
+        if not self.recording:
+            return
+        
+        elapsed = time.time() - self.start_time
+        key_str = event.name
+        
+        # Ignorer F8 (touche d'arrêt)
+        if key_str.lower() == "f8":
+            return
+        
+        action = {
+            "type": "key",
+            "time": round(elapsed, 3),
+            "key": key_str
+        }
+        
+        self.actions.append(action)
+        self.log(f"  ⌨️ +{elapsed:.2f}s Touche: {key_str}")
+    
     def on_key_press(self, key):
-        """Capture une touche"""
+        """Capture une touche (version pynput fallback)"""
         if not self.recording:
             return
         
         elapsed = time.time() - self.start_time
         
-        # Convertir la touche en string
         try:
             key_str = key.char if hasattr(key, 'char') and key.char else str(key).replace("Key.", "")
         except:
@@ -223,7 +271,7 @@ class ActionRecorder:
         
         action = {
             "type": "key",
-            "time": round(elapsed, 3),  # Précision milliseconde
+            "time": round(elapsed, 3),
             "key": key_str
         }
         
@@ -283,22 +331,43 @@ class CombatEngine:
         return cv2.cvtColor(frame, cv2.COLOR_RGB2BGR)
     
     def detect_mob(self, frame):
-        """Détecte un mob sur l'écran"""
+        """Détecte un mob sur l'écran - Version améliorée"""
         if not self.mob_templates:
             return None
         
         h, w = frame.shape[:2]
         game_area = frame[int(h*0.05):int(h*0.75), :]
         
+        # Convertir en niveaux de gris pour ignorer les variations de fond
+        game_gray = cv2.cvtColor(game_area, cv2.COLOR_BGR2GRAY)
+        
         best_match = None
         best_val = 0
         
         for template in self.mob_templates:
             try:
-                result = cv2.matchTemplate(game_area, template, cv2.TM_CCOEFF_NORMED)
-                min_val, max_val, min_loc, max_loc = cv2.minMaxLoc(result)
+                # Convertir le template en gris aussi
+                if len(template.shape) == 3:
+                    template_gray = cv2.cvtColor(template, cv2.COLOR_BGR2GRAY)
+                else:
+                    template_gray = template
                 
-                if max_val > 0.7 and max_val > best_val:
+                # Méthode 1: CCOEFF_NORMED (couleurs)
+                result1 = cv2.matchTemplate(game_area, template, cv2.TM_CCOEFF_NORMED)
+                _, max_val1, _, max_loc1 = cv2.minMaxLoc(result1)
+                
+                # Méthode 2: CCOEFF_NORMED (gris) - ignore le fond
+                result2 = cv2.matchTemplate(game_gray, template_gray, cv2.TM_CCOEFF_NORMED)
+                _, max_val2, _, max_loc2 = cv2.minMaxLoc(result2)
+                
+                # Prendre le meilleur des deux
+                if max_val2 > max_val1:
+                    max_val, max_loc = max_val2, max_loc2
+                else:
+                    max_val, max_loc = max_val1, max_loc1
+                
+                # Seuil plus bas (0.6) pour tolérer les variations
+                if max_val > 0.6 and max_val > best_val:
                     best_val = max_val
                     th, tw = template.shape[:2]
                     cx = max_loc[0] + tw // 2
@@ -330,17 +399,17 @@ class CombatEngine:
         """Attaque un mob avec CLIC DROIT"""
         self.log(f"🎯 Mob trouvé à ({pos[0]}, {pos[1]})")
         
-        # Écrire .movemobs d'abord
-        self.log("📝 Commande: .movemobs")
-        if HAS_KEYBOARD:
-            keyboard.write('.movemobs')
-        else:
-            pyautogui.typewrite('.movemobs', interval=0.02)
-        time.sleep(0.1)
-        pyautogui.press('enter')
-        
-        # Attendre après la commande
-        time.sleep(0.3)
+        # Option .movemobs
+        use_movemobs = self.config.data.get("combat", {}).get("use_movemobs", False)
+        if use_movemobs:
+            self.log("📝 Commande: .movemobs")
+            if HAS_KEYBOARD:
+                keyboard.write('.movemobs')
+            else:
+                pyautogui.typewrite('.movemobs', interval=0.02)
+            time.sleep(0.1)
+            pyautogui.press('enter')
+            time.sleep(0.3)
         
         # CLIC DROIT pour attaquer
         self.log(f"🖱️ Clic droit sur mob")
@@ -352,16 +421,23 @@ class CombatEngine:
         time.sleep(3)
     
     def replay_actions(self):
-        """Rejoue les actions enregistrées avec les délais"""
+        """Rejoue les actions enregistrées"""
         actions = self.config.data.get("recorded_actions", [])
         
         if not actions:
             self.log("⚠️ Aucune action enregistrée!")
             return
         
-        self.log(f"▶️ Replay {len(actions)} actions...")
-        if actions:
-            self.log(f"   Durée: {actions[-1]['time']:.1f}s")
+        # Mode avec ou sans délais enregistrés
+        use_recorded_delays = self.config.data.get("combat", {}).get("use_recorded_delays", True)
+        action_delay = self.config.data.get("combat", {}).get("action_delay", 0.3)
+        
+        if use_recorded_delays:
+            self.log(f"▶️ Replay {len(actions)} actions (délais enregistrés)...")
+            if actions:
+                self.log(f"   Durée prévue: {actions[-1]['time']:.1f}s")
+        else:
+            self.log(f"⚡ Replay {len(actions)} actions (délai fixe: {action_delay}s)")
         
         start_replay = time.time()
         
@@ -369,12 +445,17 @@ class CombatEngine:
             if not self.running or self.paused:
                 break
             
-            # Timing exact comme enregistré
-            target_time = action["time"]
-            elapsed = time.time() - start_replay
-            wait_time = target_time - elapsed
-            if wait_time > 0:
-                time.sleep(wait_time)
+            if use_recorded_delays:
+                # MODE DÉLAIS ENREGISTRÉS - timing exact
+                target_time = action["time"]
+                elapsed = time.time() - start_replay
+                wait_time = target_time - elapsed
+                if wait_time > 0:
+                    time.sleep(wait_time)
+            else:
+                # MODE DÉLAI FIXE - attendre entre chaque action
+                if i > 0:
+                    time.sleep(action_delay)
             
             # Exécuter l'action
             if action["type"] == "click":
@@ -527,6 +608,11 @@ class CombatGUI:
                                      bg=self.colors['bg2'], fg=self.colors['text2'])
         self.status_label.pack(side='left', padx=20)
         
+        # Admin warning
+        if not is_admin():
+            tk.Label(header, text="⚠️ Pas admin!", font=('Segoe UI', 9, 'bold'),
+                    bg=self.colors['bg2'], fg=self.colors['warning']).pack(side='left')
+        
         # Boutons
         btn_frame = tk.Frame(header, bg=self.colors['bg2'])
         btn_frame.pack(side='right', padx=20)
@@ -644,24 +730,55 @@ class CombatGUI:
         tk.Spinbox(row1, from_=0.5, to=10.0, increment=0.5, width=5,
                   textvariable=self.search_delay_var, command=self.save_params).pack(side='right')
         
-        # Délai chargement combat
+        # Délai entre actions (mode rapide)
         row2 = tk.Frame(param_frame, bg=self.colors['bg2'])
         row2.pack(fill='x', pady=2)
-        tk.Label(row2, text="Chargement combat:", font=('Segoe UI', 9),
+        tk.Label(row2, text="Entre actions:", font=('Segoe UI', 9),
+                bg=self.colors['bg2'], fg=self.colors['text2']).pack(side='left')
+        self.action_delay_var = tk.StringVar(value=str(self.config.data.get("combat", {}).get("action_delay", 0.3)))
+        tk.Spinbox(row2, from_=0.1, to=2.0, increment=0.1, width=5,
+                  textvariable=self.action_delay_var, command=self.save_params).pack(side='right')
+        
+        # Délai chargement combat
+        row3 = tk.Frame(param_frame, bg=self.colors['bg2'])
+        row3.pack(fill='x', pady=2)
+        tk.Label(row3, text="Chargement combat:", font=('Segoe UI', 9),
                 bg=self.colors['bg2'], fg=self.colors['text2']).pack(side='left')
         self.combat_load_delay_var = tk.StringVar(value=str(self.config.data.get("combat", {}).get("combat_load_delay", 2.0)))
-        tk.Spinbox(row2, from_=0.5, to=10.0, increment=0.5, width=5,
+        tk.Spinbox(row3, from_=0.5, to=10.0, increment=0.5, width=5,
                   textvariable=self.combat_load_delay_var, command=self.save_params).pack(side='right')
         
-        # Mode auto/manuel
-        row3 = tk.Frame(param_frame, bg=self.colors['bg2'])
-        row3.pack(fill='x', pady=5)
-        self.auto_attack_var = tk.BooleanVar(value=self.config.data.get("combat", {}).get("auto_attack", True))
-        tk.Checkbutton(row3, text="🤖 Attaque auto (cherche mobs)", variable=self.auto_attack_var,
+        # Checkbox: Replay avec délais enregistrés ou délai fixe
+        row4 = tk.Frame(param_frame, bg=self.colors['bg2'])
+        row4.pack(fill='x', pady=3)
+        self.use_recorded_delays_var = tk.BooleanVar(value=self.config.data.get("combat", {}).get("use_recorded_delays", True))
+        tk.Checkbutton(row4, text="⏱️ Délais enregistrés", variable=self.use_recorded_delays_var,
                       bg=self.colors['bg2'], fg=self.colors['text'], selectcolor=self.colors['bg3'],
                       activebackground=self.colors['bg2'], activeforeground=self.colors['text'],
                       font=('Segoe UI', 9), command=self.save_params).pack(side='left')
-        tk.Label(row3, text="(décoché = manuel)", font=('Segoe UI', 8),
+        tk.Label(row4, text="(décoché = délai fixe ⚡)", font=('Segoe UI', 8),
+                bg=self.colors['bg2'], fg=self.colors['warning']).pack(side='right')
+        
+        # Mode auto/manuel
+        row5 = tk.Frame(param_frame, bg=self.colors['bg2'])
+        row5.pack(fill='x', pady=3)
+        self.auto_attack_var = tk.BooleanVar(value=self.config.data.get("combat", {}).get("auto_attack", True))
+        tk.Checkbutton(row5, text="🤖 Attaque auto (cherche mobs)", variable=self.auto_attack_var,
+                      bg=self.colors['bg2'], fg=self.colors['text'], selectcolor=self.colors['bg3'],
+                      activebackground=self.colors['bg2'], activeforeground=self.colors['text'],
+                      font=('Segoe UI', 9), command=self.save_params).pack(side='left')
+        tk.Label(row5, text="(décoché = manuel)", font=('Segoe UI', 8),
+                bg=self.colors['bg2'], fg=self.colors['text2']).pack(side='right')
+        
+        # Option .movemobs
+        row6 = tk.Frame(param_frame, bg=self.colors['bg2'])
+        row6.pack(fill='x', pady=3)
+        self.use_movemobs_var = tk.BooleanVar(value=self.config.data.get("combat", {}).get("use_movemobs", False))
+        tk.Checkbutton(row6, text="📝 Envoyer .movemobs", variable=self.use_movemobs_var,
+                      bg=self.colors['bg2'], fg=self.colors['text'], selectcolor=self.colors['bg3'],
+                      activebackground=self.colors['bg2'], activeforeground=self.colors['text'],
+                      font=('Segoe UI', 9), command=self.save_params).pack(side='left')
+        tk.Label(row6, text="(avant clic mob)", font=('Segoe UI', 8),
                 bg=self.colors['bg2'], fg=self.colors['text2']).pack(side='right')
         
         # ===== RIGHT PANEL - LOG =====
@@ -708,6 +825,11 @@ class CombatGUI:
         hotkey_text = f"▶ {hotkeys.get('start', 'F5')} | ⏸ {hotkeys.get('pause', 'F6')} | ⏹ {hotkeys.get('stop', 'F7')} | 🔴 {hotkeys.get('record', 'F8')}"
         tk.Label(footer, text=hotkey_text, font=('Segoe UI', 10),
                 bg=self.colors['bg2'], fg=self.colors['accent']).pack(side='left', padx=20, pady=8)
+        
+        # Info admin
+        if not is_admin():
+            tk.Label(footer, text="(Lance en Admin pour les raccourcis dans le jeu)", font=('Segoe UI', 8),
+                    bg=self.colors['bg2'], fg=self.colors['warning']).pack(side='left', padx=5, pady=8)
         
         tk.Button(footer, text="⌨️ Raccourcis", font=('Segoe UI', 9),
                  bg=self.colors['bg3'], fg='white',
@@ -853,8 +975,8 @@ class CombatGUI:
             threading.Thread(target=self._do_capture_mob, daemon=True).start()
     
     def _do_capture_mob(self):
-        """Effectue la capture du mob"""
-        self.log("📸 Place ta souris sur le mob...")
+        """Effectue la capture du mob - Taille réduite pour éviter le fond"""
+        self.log("📸 Place ta souris SUR LE CENTRE du mob...")
         time.sleep(1)
         self.log("⏳ 2...")
         time.sleep(1)
@@ -867,7 +989,8 @@ class CombatGUI:
         frame = np.array(screenshot)
         frame = cv2.cvtColor(frame, cv2.COLOR_RGB2BGR)
         
-        size = 80
+        # Taille RÉDUITE: 50x50 pour capturer surtout le mob, pas le fond
+        size = 50
         y1 = max(0, y - size//2)
         y2 = min(frame.shape[0], y + size//2)
         x1 = max(0, x - size//2)
@@ -885,7 +1008,8 @@ class CombatGUI:
             filepath = os.path.join(mob_dir, filename)
             
             cv2.imwrite(filepath, template)
-            self.log(f"✅ Mob capturé: {filename}")
+            self.log(f"✅ Mob capturé: {filename} (50x50)")
+            self.log(f"💡 Astuce: Capture le CENTRE du mob!")
             
             self.root.after(0, self.refresh_mob_list)
         else:
@@ -914,8 +1038,11 @@ class CombatGUI:
             if "combat" not in self.config.data:
                 self.config.data["combat"] = {}
             self.config.data["combat"]["search_delay"] = float(self.search_delay_var.get())
+            self.config.data["combat"]["action_delay"] = float(self.action_delay_var.get())
             self.config.data["combat"]["combat_load_delay"] = float(self.combat_load_delay_var.get())
+            self.config.data["combat"]["use_recorded_delays"] = self.use_recorded_delays_var.get()
             self.config.data["combat"]["auto_attack"] = self.auto_attack_var.get()
+            self.config.data["combat"]["use_movemobs"] = self.use_movemobs_var.get()
             self.config.save()
         except:
             pass
@@ -964,20 +1091,34 @@ class CombatGUI:
                  command=save_hotkeys).pack(pady=15)
     
     def setup_hotkeys(self):
-        """Configure les raccourcis clavier"""
+        """Configure les raccourcis clavier - Version GLOBALE"""
         if not HAS_KEYBOARD:
+            self.log("⚠️ Module keyboard non disponible!")
             return
         
         try:
             keyboard.unhook_all()
             hotkeys = self.config.data.get("hotkeys", {})
             
-            keyboard.add_hotkey(hotkeys.get("start", "F5"), lambda: self.root.after(0, self.start_bot), suppress=False)
-            keyboard.add_hotkey(hotkeys.get("pause", "F6"), lambda: self.root.after(0, self.pause_bot), suppress=False)
-            keyboard.add_hotkey(hotkeys.get("stop", "F7"), lambda: self.root.after(0, self.stop_bot), suppress=False)
-            keyboard.add_hotkey(hotkeys.get("record", "F8"), lambda: self.root.after(0, self.toggle_recording), suppress=False)
-        except:
-            pass
+            # Utiliser hook() au lieu de add_hotkey() pour une meilleure compatibilité
+            def on_key_event(event):
+                if event.event_type == 'down':
+                    key = event.name.upper()
+                    
+                    if key == hotkeys.get("start", "F5").upper():
+                        self.root.after(0, self.start_bot)
+                    elif key == hotkeys.get("pause", "F6").upper():
+                        self.root.after(0, self.pause_bot)
+                    elif key == hotkeys.get("stop", "F7").upper():
+                        self.root.after(0, self.stop_bot)
+                    elif key == hotkeys.get("record", "F8").upper():
+                        self.root.after(0, self.toggle_recording)
+            
+            keyboard.hook(on_key_event)
+            self.log("✅ Raccourcis globaux activés (F5/F6/F7/F8)")
+        except Exception as e:
+            self.log(f"⚠️ Erreur hotkeys: {e}")
+            self.log("   → Lance le bot en ADMINISTRATEUR!")
     
     def update_time(self):
         """Met à jour le temps"""
@@ -1061,8 +1202,18 @@ class CombatGUI:
 # ============================================================
 if __name__ == "__main__":
     print("=" * 50)
-    print("🗡️ Dofus Combat Bot v1.0")
+    print("🗡️ Dofus Combat Bot v2.0")
     print("=" * 50)
+    
+    # Vérifier les droits admin
+    if not is_admin():
+        print("")
+        print("⚠️  ATTENTION: Pas en mode Administrateur!")
+        print("   Les raccourcis (F5/F6/F7/F8) peuvent ne pas marcher dans le jeu.")
+        print("   → Clic droit sur le fichier → 'Exécuter en tant qu'administrateur'")
+        print("")
+    else:
+        print("✅ Mode Administrateur: OK")
     
     app = CombatGUI()
     app.run()
