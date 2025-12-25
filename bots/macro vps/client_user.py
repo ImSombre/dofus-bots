@@ -84,9 +84,10 @@ class DofusClient:
     def setup_ui(self):
         self.root = tk.Tk()
         self.root.title("🎮 Client Dofus")
-        self.root.geometry("500x650")
+        self.root.geometry("600x850")
         self.root.configure(bg=self.c['bg'])
-        self.root.resizable(False, False)
+        self.root.resizable(True, True)
+        self.root.minsize(600, 800)
         
         # ===== HEADER =====
         header = tk.Frame(self.root, bg=self.c['card'], height=50)
@@ -168,12 +169,12 @@ class DofusClient:
         self.create_sequences_tab()
         
         # ===== FOOTER LOG =====
-        log_frame = tk.Frame(self.root, bg=self.c['card'], height=80)
+        log_frame = tk.Frame(self.root, bg=self.c['card'], height=100)
         log_frame.pack(fill='x', padx=15, pady=10)
         log_frame.pack_propagate(False)
         
         self.log_text = tk.Text(log_frame, bg=self.c['card'], fg=self.c['text2'],
-                                font=('Consolas', 9), wrap='word', height=4,
+                                font=('Consolas', 9), wrap='word', height=5,
                                 relief='flat', state='disabled')
         self.log_text.pack(fill='both', expand=True, padx=10, pady=5)
     
@@ -290,7 +291,7 @@ class DofusClient:
                 bg=self.c['card'], fg=self.c['text2']).pack(anchor='w')
         
         # Scrollable frame
-        canvas = tk.Canvas(main, bg=self.c['card'], highlightthickness=0, height=150)
+        canvas = tk.Canvas(main, bg=self.c['card'], highlightthickness=0, height=180)
         self.macros_frame = tk.Frame(canvas, bg=self.c['card'])
         canvas.create_window((0, 0), window=self.macros_frame, anchor="nw")
         canvas.pack(fill='both', expand=True, pady=10)
@@ -340,7 +341,7 @@ class DofusClient:
         # Liste
         tk.Frame(main, bg=self.c['input'], height=2).pack(fill='x', pady=10)
         
-        canvas = tk.Canvas(main, bg=self.c['card'], highlightthickness=0, height=120)
+        canvas = tk.Canvas(main, bg=self.c['card'], highlightthickness=0, height=150)
         self.sequences_frame = tk.Frame(canvas, bg=self.c['card'])
         canvas.create_window((0, 0), window=self.sequences_frame, anchor="nw")
         canvas.pack(fill='both', expand=True)
