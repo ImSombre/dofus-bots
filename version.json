@@ -1,5 +1,5 @@
 {
-    "version": "2.4.3",
+    "version": "2.4.4",
     "changelog": "Hub: Redemarrage auto apres MAJ | Travel Bot v3.3",
     "files": [
         {"path": "hub.py"},
@@ -9,6 +9,7 @@
         {"path": "bots/farming/bot.py"},
         {"path": "bots/combat/bot_combat.py"},
         {"path": "bots/macrovps/client_user.py"},
+        {"path": "bots/ia/dofus_agent.py"},
         {"path": "bots/outils.py"}
     ]
 }
