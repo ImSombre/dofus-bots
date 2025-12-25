@@ -1,0 +1,10 @@
+{
+  "server_host": "localhost",
+  "server_port": 8765,
+  "auth_key": "",
+  "client_name": "Client",
+  "macros": {
+    "tp": ".tpgroupe"
+  },
+  "sequences": {}
+}
