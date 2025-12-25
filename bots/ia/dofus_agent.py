@@ -25,6 +25,21 @@ from enum import Enum
 import heapq
 import random
 
+# Pynput pour capture clavier/souris
+try:
+    from pynput import mouse, keyboard as pynput_keyboard
+    HAS_PYNPUT = True
+except:
+    HAS_PYNPUT = False
+    print("⚠️ pynput non disponible - pip install pynput")
+
+# Keyboard pour raccourcis globaux
+try:
+    import keyboard
+    HAS_KEYBOARD = True
+except:
+    HAS_KEYBOARD = False
+
 # Configuration pyautogui
 pyautogui.FAILSAFE = False
 pyautogui.PAUSE = 0.05
@@ -593,6 +608,8 @@ class AutonomousAgent:
         self.is_recording = False
         self.recorded_actions: List[DemonstrationAction] = []
         self.record_start_time = 0
+        self.mouse_listener = None
+        self.keyboard_listener = None
         
         # Callback pour l'UI
         self.callback = None
@@ -667,36 +684,175 @@ class AutonomousAgent:
     # ===== ENREGISTREMENT / DÉMONSTRATION =====
     
     def start_recording(self):
-        """Démarre l'enregistrement d'une démonstration"""
+        """Démarre l'enregistrement d'une démonstration (donjon complet)"""
+        if not HAS_PYNPUT:
+            self.log("❌ pynput non disponible!")
+            return
+        
         self.is_recording = True
         self.recorded_actions = []
         self.record_start_time = time.time()
-        self.log("🔴 Enregistrement démarré - Fais ton combat!")
+        
+        self.log("🔴 Enregistrement démarré - Fais ton donjon!")
+        self.log("   Clics et touches seront capturés")
+        self.log("   Clique sur ARRÊTER quand tu as fini")
+        
+        # Listener souris
+        self.mouse_listener = mouse.Listener(
+            on_click=self._on_mouse_click
+        )
+        self.mouse_listener.start()
+        
+        # Listener clavier
+        self.keyboard_listener = pynput_keyboard.Listener(
+            on_press=self._on_key_press
+        )
+        self.keyboard_listener.start()
+    
+    def _on_mouse_click(self, x, y, button, pressed):
+        """Capture un clic souris"""
+        if not self.is_recording or not pressed:
+            return
+        
+        elapsed = time.time() - self.record_start_time
+        button_name = "left" if button == mouse.Button.left else "right"
+        
+        action = DemonstrationAction(
+            timestamp=elapsed,
+            action_type=ActionType.MOVE,  # Clic = déplacement ou interaction
+            target_position=Position(x, y),
+            context={"button": button_name, "type": "click"}
+        )
+        self.recorded_actions.append(action)
+        self.log(f"   🖱️ +{elapsed:.1f}s Clic {button_name} ({x}, {y})")
+    
+    def _on_key_press(self, key):
+        """Capture une touche clavier"""
+        if not self.is_recording:
+            return
+        
+        elapsed = time.time() - self.record_start_time
+        
+        # Convertir la touche en string
+        try:
+            key_str = key.char if hasattr(key, 'char') and key.char else str(key).replace("Key.", "")
+        except:
+            key_str = str(key).replace("Key.", "")
+        
+        # Ignorer certaines touches système
+        if key_str in ['shift', 'ctrl', 'alt', 'cmd', 'shift_r', 'ctrl_r', 'alt_r']:
+            return
+        
+        action = DemonstrationAction(
+            timestamp=elapsed,
+            action_type=ActionType.SPELL,  # Touche = sort ou action
+            context={"key": key_str, "type": "key"}
+        )
+        self.recorded_actions.append(action)
+        self.log(f"   ⌨️ +{elapsed:.1f}s Touche: {key_str}")
     
     def stop_recording(self) -> List[DemonstrationAction]:
         """Arrête l'enregistrement"""
         self.is_recording = False
-        self.log(f"⏹️ Enregistrement terminé - {len(self.recorded_actions)} actions")
         
-        # Apprendre du pattern
+        # Arrêter les listeners
+        if hasattr(self, 'mouse_listener') and self.mouse_listener:
+            self.mouse_listener.stop()
+        if hasattr(self, 'keyboard_listener') and self.keyboard_listener:
+            self.keyboard_listener.stop()
+        
+        action_count = len(self.recorded_actions)
+        duration = self.recorded_actions[-1].timestamp if self.recorded_actions else 0
+        
+        self.log(f"⏹️ Enregistrement terminé!")
+        self.log(f"   {action_count} actions en {duration:.1f}s")
+        
+        # Sauvegarder les actions
         if self.recorded_actions:
+            self._save_recorded_actions()
             self.combat_ai.learn_from_demonstration(self.recorded_actions)
         
         return self.recorded_actions
     
-    def record_action(self, action_type: ActionType, **kwargs):
-        """Enregistre une action pendant la démonstration"""
-        if not self.is_recording:
+    def _save_recorded_actions(self):
+        """Sauvegarde les actions enregistrées dans un fichier"""
+        actions_file = os.path.join(self.config_dir, "recorded_actions.json")
+        
+        data = []
+        for action in self.recorded_actions:
+            data.append({
+                "timestamp": action.timestamp,
+                "type": action.action_type.value,
+                "position": {"x": action.target_position.x, "y": action.target_position.y} if action.target_position else None,
+                "context": action.context
+            })
+        
+        with open(actions_file, 'w') as f:
+            json.dump(data, f, indent=2)
+        
+        self.log(f"💾 Actions sauvegardées dans recorded_actions.json")
+    
+    def load_recorded_actions(self) -> List[DemonstrationAction]:
+        """Charge les actions depuis le fichier"""
+        actions_file = os.path.join(self.config_dir, "recorded_actions.json")
+        
+        if not os.path.exists(actions_file):
+            return []
+        
+        try:
+            with open(actions_file, 'r') as f:
+                data = json.load(f)
+            
+            actions = []
+            for item in data:
+                pos = Position(item["position"]["x"], item["position"]["y"]) if item.get("position") else None
+                action = DemonstrationAction(
+                    timestamp=item["timestamp"],
+                    action_type=ActionType(item["type"]),
+                    target_position=pos,
+                    context=item.get("context", {})
+                )
+                actions.append(action)
+            
+            return actions
+        except Exception as e:
+            print(f"Erreur chargement actions: {e}")
+            return []
+    
+    def replay_recorded_actions(self):
+        """Rejoue les actions enregistrées"""
+        if not self.recorded_actions:
+            self.recorded_actions = self.load_recorded_actions()
+        
+        if not self.recorded_actions:
+            self.log("❌ Aucune action à rejouer!")
             return
         
-        action = DemonstrationAction(
-            timestamp=time.time() - self.record_start_time,
-            action_type=action_type,
-            target_position=kwargs.get("position"),
-            spell_id=kwargs.get("spell_id"),
-            context=kwargs.get("context", {})
-        )
-        self.recorded_actions.append(action)
+        self.log(f"▶️ Replay de {len(self.recorded_actions)} actions...")
+        
+        last_time = 0
+        for action in self.recorded_actions:
+            if not self.running:
+                break
+            
+            # Attendre le bon moment
+            wait_time = action.timestamp - last_time
+            if wait_time > 0:
+                time.sleep(wait_time)
+            last_time = action.timestamp
+            
+            # Exécuter l'action
+            if action.context.get("type") == "click":
+                x, y = action.target_position.x, action.target_position.y
+                button = action.context.get("button", "left")
+                self.controller.click(x, y, button)
+                
+            elif action.context.get("type") == "key":
+                key = action.context.get("key", "")
+                if key:
+                    self.controller.press_key(key)
+        
+        self.log("✅ Replay terminé!")
     
     # ===== BOUCLE PRINCIPALE =====
     
@@ -943,16 +1099,46 @@ class AgentGUI:
         tk.Label(parent, text="🎓 Apprentissage", font=('Segoe UI', 14, 'bold'),
                 bg=self.colors['bg2'], fg=self.colors['text']).pack(pady=5)
         
-        self.record_btn = tk.Button(parent, text="🔴 Enregistrer combat", font=('Segoe UI', 10),
-                                    bg='#ff0000', fg='white',
+        tk.Label(parent, text="Enregistre un donjon complet!", font=('Segoe UI', 9),
+                bg=self.colors['bg2'], fg=self.colors['text2']).pack()
+        
+        self.record_btn = tk.Button(parent, text="🔴 Enregistrer", font=('Segoe UI', 10),
+                                    bg='#ff0000', fg='white', width=15,
                                     command=self.toggle_recording)
         self.record_btn.pack(pady=5)
+        
+        # Charger les actions existantes
+        existing_actions = self.agent.load_recorded_actions()
+        self.agent.recorded_actions = existing_actions
+        
+        self.actions_count_label = tk.Label(parent, 
+                                            text=f"📝 {len(existing_actions)} actions enregistrées",
+                                            font=('Segoe UI', 10),
+                                            bg=self.colors['bg2'], fg=self.colors['success'])
+        self.actions_count_label.pack()
+        
+        self.replay_btn = tk.Button(parent, text="▶️ Rejouer les actions", font=('Segoe UI', 10),
+                                    bg=self.colors['info'], fg='white', width=18,
+                                    command=self.replay_actions)
+        self.replay_btn.pack(pady=5)
         
         self.patterns_label = tk.Label(parent, 
                                        text=f"📚 {len(self.agent.combat_ai.learned_patterns)} pattern(s) appris",
                                        font=('Segoe UI', 10),
                                        bg=self.colors['bg2'], fg=self.colors['info'])
         self.patterns_label.pack()
+        
+        # Boutons supplémentaires
+        btn_frame = tk.Frame(parent, bg=self.colors['bg2'])
+        btn_frame.pack(pady=5)
+        
+        tk.Button(btn_frame, text="👁️ Voir", font=('Segoe UI', 9),
+                 bg=self.colors['bg3'], fg='white', width=8,
+                 command=self.view_actions).pack(side='left', padx=2)
+        
+        tk.Button(btn_frame, text="🗑️ Effacer", font=('Segoe UI', 9),
+                 bg=self.colors['accent'], fg='white', width=8,
+                 command=self.clear_actions).pack(side='left', padx=2)
     
     def create_log_panel(self, parent):
         """Crée le panneau de log"""
@@ -1032,11 +1218,79 @@ class AgentGUI:
         """Active/désactive l'enregistrement"""
         if self.agent.is_recording:
             self.agent.stop_recording()
-            self.record_btn.config(text="🔴 Enregistrer combat", bg='#ff0000')
+            self.record_btn.config(text="🔴 Enregistrer", bg='#ff0000')
+            self.actions_count_label.config(text=f"📝 {len(self.agent.recorded_actions)} actions enregistrées")
             self.patterns_label.config(text=f"📚 {len(self.agent.combat_ai.learned_patterns)} pattern(s) appris")
         else:
             self.agent.start_recording()
-            self.record_btn.config(text="⏹️ Arrêter", bg=self.colors['warning'])
+            self.record_btn.config(text="⏹️ ARRÊTER", bg=self.colors['warning'])
+    
+    def replay_actions(self):
+        """Rejoue les actions enregistrées"""
+        if not self.agent.recorded_actions:
+            messagebox.showwarning("Attention", "Aucune action enregistrée!\n\nEnregistre d'abord un donjon.")
+            return
+        
+        if messagebox.askyesno("Replay", f"Rejouer {len(self.agent.recorded_actions)} actions?\n\nMets Dofus au premier plan!"):
+            self.log("⏳ Replay dans 3 secondes...")
+            self.root.after(3000, self._do_replay)
+    
+    def _do_replay(self):
+        """Lance le replay dans un thread"""
+        def replay_thread():
+            self.agent.running = True
+            self.agent.replay_recorded_actions()
+            self.agent.running = False
+        
+        threading.Thread(target=replay_thread, daemon=True).start()
+    
+    def view_actions(self):
+        """Affiche les actions enregistrées"""
+        if not self.agent.recorded_actions:
+            messagebox.showinfo("Actions", "Aucune action enregistrée")
+            return
+        
+        dialog = tk.Toplevel(self.root)
+        dialog.title("👁️ Actions enregistrées")
+        dialog.geometry("500x400")
+        dialog.configure(bg=self.colors['bg'])
+        
+        tk.Label(dialog, text=f"📝 {len(self.agent.recorded_actions)} actions", 
+                font=('Segoe UI', 14, 'bold'),
+                bg=self.colors['bg'], fg=self.colors['text']).pack(pady=10)
+        
+        # Liste des actions
+        text = tk.Text(dialog, bg=self.colors['bg2'], fg=self.colors['text'],
+                      font=('Consolas', 9), wrap='word')
+        text.pack(fill='both', expand=True, padx=10, pady=10)
+        
+        for i, action in enumerate(self.agent.recorded_actions[:100]):  # Limiter à 100
+            action_type = action.context.get("type", "?")
+            if action_type == "click":
+                pos = action.target_position
+                btn = action.context.get("button", "left")
+                text.insert('end', f"{i+1}. [{action.timestamp:.1f}s] 🖱️ Clic {btn} ({pos.x}, {pos.y})\n")
+            elif action_type == "key":
+                key = action.context.get("key", "?")
+                text.insert('end', f"{i+1}. [{action.timestamp:.1f}s] ⌨️ Touche: {key}\n")
+        
+        if len(self.agent.recorded_actions) > 100:
+            text.insert('end', f"\n... et {len(self.agent.recorded_actions) - 100} autres actions")
+        
+        text.config(state='disabled')
+    
+    def clear_actions(self):
+        """Efface les actions enregistrées"""
+        if messagebox.askyesno("Confirmer", "Effacer toutes les actions enregistrées?"):
+            self.agent.recorded_actions = []
+            
+            # Supprimer le fichier
+            actions_file = os.path.join(self.agent.config_dir, "recorded_actions.json")
+            if os.path.exists(actions_file):
+                os.remove(actions_file)
+            
+            self.actions_count_label.config(text="📝 0 actions enregistrées")
+            self.log("🗑️ Actions effacées")
     
     def capture_mob(self):
         """Capture un template de mob"""
