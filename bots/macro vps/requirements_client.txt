@@ -1,0 +1,8 @@
+# ======================================
+# REQUIREMENTS CLIENT UTILISATEUR
+# ======================================
+# pip install -r requirements_client.txt
+
+websockets>=11.0
+pyautogui>=0.9.53
+Pillow>=9.0
