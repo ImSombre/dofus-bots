@@ -422,7 +422,7 @@ class DofusClient:
         self.log("📺 Visualisation arrêtée")
     
     def update_screen(self, frame_data):
-        """Met à jour l'affichage de l'écran"""
+        """Met à jour l'affichage de l'écran - VERSION OPTIMISÉE"""
         if not HAS_PIL or not self.screen_watching:
             return
         
@@ -438,31 +438,36 @@ class DofusClient:
             if canvas_width < 50 or canvas_height < 50:
                 return
             
-            # Redimensionner pour tenir dans le canvas tout en gardant le ratio
-            img_ratio = img.width / img.height
-            canvas_ratio = canvas_width / canvas_height
+            # Calculer la taille une seule fois si le canvas n'a pas changé
+            if not hasattr(self, '_last_canvas_size') or self._last_canvas_size != (canvas_width, canvas_height):
+                self._last_canvas_size = (canvas_width, canvas_height)
+                
+                img_ratio = img.width / img.height
+                canvas_ratio = canvas_width / canvas_height
+                
+                if img_ratio > canvas_ratio:
+                    self._target_width = canvas_width
+                    self._target_height = int(canvas_width / img_ratio)
+                else:
+                    self._target_height = canvas_height
+                    self._target_width = int(canvas_height * img_ratio)
+                
+                self.display_offset_x = (canvas_width - self._target_width) // 2
+                self.display_offset_y = (canvas_height - self._target_height) // 2
+                self.display_width = self._target_width
+                self.display_height = self._target_height
             
-            if img_ratio > canvas_ratio:
-                new_width = canvas_width
-                new_height = int(canvas_width / img_ratio)
-            else:
-                new_height = canvas_height
-                new_width = int(canvas_height * img_ratio)
-            
-            # Utiliser NEAREST pour plus de rapidité (ou BILINEAR pour meilleure qualité)
-            img_resized = img.resize((new_width, new_height), Image.NEAREST)
+            # Redimensionner avec NEAREST (le plus rapide)
+            if img.size != (self._target_width, self._target_height):
+                img = img.resize((self._target_width, self._target_height), Image.NEAREST)
             
             # Calculer l'échelle pour la conversion des coordonnées
-            self.screen_scale = frame_data['original_width'] / new_width
-            self.display_offset_x = (canvas_width - new_width) // 2
-            self.display_offset_y = (canvas_height - new_height) // 2
-            self.display_width = new_width
-            self.display_height = new_height
+            self.screen_scale = frame_data['original_width'] / self._target_width
             
             # Convertir en PhotoImage
-            self.current_frame = ImageTk.PhotoImage(img_resized)
+            self.current_frame = ImageTk.PhotoImage(img)
             
-            # Afficher - utiliser itemconfig si l'image existe déjà
+            # Afficher
             self.screen_canvas.delete('screen_img')
             self.screen_canvas.create_image(
                 canvas_width // 2, canvas_height // 2,
@@ -481,7 +486,6 @@ class DofusClient:
                 self.last_fps_time = now
                 
         except Exception as e:
-            # Ignorer les erreurs silencieusement pour ne pas spam
             pass
     
     def on_screen_click(self, event, button):
