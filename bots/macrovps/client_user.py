@@ -423,7 +423,7 @@ class DofusClient:
     
     def update_screen(self, frame_data):
         """Met à jour l'affichage de l'écran"""
-        if not HAS_PIL:
+        if not HAS_PIL or not self.screen_watching:
             return
         
         try:
@@ -435,7 +435,7 @@ class DofusClient:
             canvas_width = self.screen_canvas.winfo_width()
             canvas_height = self.screen_canvas.winfo_height()
             
-            if canvas_width < 10 or canvas_height < 10:
+            if canvas_width < 50 or canvas_height < 50:
                 return
             
             # Redimensionner pour tenir dans le canvas tout en gardant le ratio
@@ -449,7 +449,8 @@ class DofusClient:
                 new_height = canvas_height
                 new_width = int(canvas_height * img_ratio)
             
-            img_resized = img.resize((new_width, new_height), Image.LANCZOS)
+            # Utiliser NEAREST pour plus de rapidité (ou BILINEAR pour meilleure qualité)
+            img_resized = img.resize((new_width, new_height), Image.NEAREST)
             
             # Calculer l'échelle pour la conversion des coordonnées
             self.screen_scale = frame_data['original_width'] / new_width
@@ -461,11 +462,12 @@ class DofusClient:
             # Convertir en PhotoImage
             self.current_frame = ImageTk.PhotoImage(img_resized)
             
-            # Afficher
-            self.screen_canvas.delete('all')
+            # Afficher - utiliser itemconfig si l'image existe déjà
+            self.screen_canvas.delete('screen_img')
             self.screen_canvas.create_image(
                 canvas_width // 2, canvas_height // 2,
-                image=self.current_frame, anchor='center'
+                image=self.current_frame, anchor='center',
+                tags='screen_img'
             )
             
             # Calculer FPS
@@ -479,6 +481,7 @@ class DofusClient:
                 self.last_fps_time = now
                 
         except Exception as e:
+            # Ignorer les erreurs silencieusement pour ne pas spam
             pass
     
     def on_screen_click(self, event, button):
@@ -612,7 +615,12 @@ class DofusClient:
             try:
                 uri = f"ws://{self.server_host}:{self.server_port}"
                 
-                async with websockets.connect(uri) as ws:
+                async with websockets.connect(
+                    uri,
+                    ping_interval=20,
+                    ping_timeout=60,
+                    max_size=10 * 1024 * 1024  # 10MB max pour les frames
+                ) as ws:
                     self.websocket = ws
                     self.root.after(0, lambda: self.log("Connecté, authentification..."))
                     
@@ -662,17 +670,30 @@ class DofusClient:
             async for msg in ws:
                 if not self.running:
                     break
-                data = json.loads(msg)
-                
-                # Gérer les frames d'écran
-                if data.get('type') == 'screen_frame':
-                    frame = data.get('frame')
-                    if frame and self.screen_watching:
-                        self.root.after(0, lambda f=frame: self.update_screen(f))
-                elif data.get('success'):
-                    self.root.after(0, lambda: self.log("✅ OK"))
-        except:
+                    
+                try:
+                    data = json.loads(msg)
+                    
+                    # Gérer les frames d'écran en priorité
+                    if data.get('type') == 'screen_frame':
+                        frame = data.get('frame')
+                        if frame and self.screen_watching:
+                            # Utiliser after_idle pour ne pas bloquer
+                            self.root.after_idle(lambda f=frame: self.update_screen(f))
+                    elif data.get('type') == 'result':
+                        if data.get('success'):
+                            self.root.after(0, lambda: self.log("✅ OK"))
+                    else:
+                        # Autres messages
+                        pass
+                except json.JSONDecodeError:
+                    pass
+                except Exception as e:
+                    pass
+        except websockets.exceptions.ConnectionClosed:
             pass
+        except Exception as e:
+            self.root.after(0, lambda: self.log(f"❌ Réception: {e}"))
     
     async def send_loop(self, ws):
         while self.running and self.connected:
