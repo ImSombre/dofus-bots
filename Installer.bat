@@ -110,6 +110,10 @@ echo      [*] mss (capture ecran rapide)...
 pip install mss --quiet 2>nul
 echo          [OK]
 
+echo      [*] PyTurboJPEG (encodage rapide)...
+pip install PyTurboJPEG --quiet 2>nul
+echo          [OK] (optionnel)
+
 echo.
 echo  ╔═══════════════════════════════════════════════════════╗
 echo  ║                                                       ║
