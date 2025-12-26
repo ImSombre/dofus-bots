@@ -213,6 +213,13 @@ class DofusClient:
                                     command=self.toggle_screen, cursor='hand2')
         self.screen_btn.pack(side='left', padx=5, ipadx=10, ipady=3)
         
+        # Bouton plein écran
+        self.fullscreen_btn = tk.Button(controls, text="⛶ Plein écran", 
+                                        font=('Segoe UI', 10, 'bold'),
+                                        bg=self.c['blue'], fg='white', relief='flat',
+                                        command=self.toggle_fullscreen, cursor='hand2')
+        self.fullscreen_btn.pack(side='left', padx=5, ipadx=10, ipady=3)
+        
         self.screen_status = tk.Label(controls, text="⚪ Arrêté", 
                                       font=('Segoe UI', 10),
                                       bg=self.c['card'], fg=self.c['text2'])
@@ -242,7 +249,7 @@ class DofusClient:
         self.screen_canvas.pack(fill='both', expand=True)
         
         # Message initial
-        self.screen_canvas.create_text(400, 200, text="📺 Clique sur 'Voir l'écran' pour commencer",
+        self.screen_canvas.create_text(400, 200, text="📺 Clique sur 'Voir l'écran' pour commencer\n\n[F11] ou [Échap] pour quitter le plein écran",
                                        fill=self.c['text2'], font=('Segoe UI', 14),
                                        tags='placeholder')
         
@@ -251,14 +258,23 @@ class DofusClient:
         self.screen_canvas.bind('<Button-3>', lambda e: self.on_screen_click(e, 'right'))
         self.screen_canvas.bind('<MouseWheel>', self.on_screen_scroll)
         self.screen_canvas.bind('<Motion>', self.on_screen_motion)
+        self.screen_canvas.bind('<Double-Button-1>', self.on_screen_double_click)
         
         # Binding clavier (quand le canvas a le focus)
         self.screen_canvas.bind('<Key>', self.on_screen_key)
         self.screen_canvas.bind('<Enter>', lambda e: self.screen_canvas.focus_set())
         
+        # Bindings plein écran
+        self.root.bind('<F11>', lambda e: self.toggle_fullscreen())
+        self.root.bind('<Escape>', lambda e: self.exit_fullscreen())
+        
         # Variables pour le FPS
         self.frame_count = 0
         self.last_fps_time = datetime.now()
+        
+        # État plein écran
+        self.is_fullscreen = False
+        self.fullscreen_window = None
     
     def create_chat_tab(self):
         tab = tk.Frame(self.notebook, bg=self.c['bg'])
@@ -421,71 +437,187 @@ class DofusClient:
         self.send_command({'type': 'stop_screen'})
         self.log("📺 Visualisation arrêtée")
     
+    def toggle_fullscreen(self):
+        """Bascule en mode plein écran"""
+        if self.is_fullscreen:
+            self.exit_fullscreen()
+        else:
+            self.enter_fullscreen()
+    
+    def enter_fullscreen(self):
+        """Entre en mode plein écran"""
+        if self.is_fullscreen:
+            return
+        
+        self.is_fullscreen = True
+        
+        # Créer une fenêtre plein écran
+        self.fullscreen_window = tk.Toplevel(self.root)
+        self.fullscreen_window.title("📺 Écran distant - Plein écran")
+        self.fullscreen_window.configure(bg='black')
+        self.fullscreen_window.attributes('-fullscreen', True)
+        self.fullscreen_window.attributes('-topmost', True)
+        
+        # Canvas plein écran
+        self.fullscreen_canvas = tk.Canvas(self.fullscreen_window, bg='#000000', 
+                                            highlightthickness=0, cursor='crosshair')
+        self.fullscreen_canvas.pack(fill='both', expand=True)
+        
+        # Label FPS
+        self.fullscreen_fps = tk.Label(self.fullscreen_window, text="", 
+                                       font=('Segoe UI', 10, 'bold'),
+                                       bg='black', fg='#00ff00')
+        self.fullscreen_fps.place(x=10, y=10)
+        
+        # Label aide
+        help_text = "[Échap] ou [F11] pour quitter • [Clic] pour interagir"
+        self.fullscreen_help = tk.Label(self.fullscreen_window, text=help_text,
+                                        font=('Segoe UI', 9),
+                                        bg='black', fg='#666666')
+        self.fullscreen_help.place(relx=0.5, y=10, anchor='n')
+        
+        # Bindings
+        self.fullscreen_window.bind('<Escape>', lambda e: self.exit_fullscreen())
+        self.fullscreen_window.bind('<F11>', lambda e: self.exit_fullscreen())
+        self.fullscreen_canvas.bind('<Button-1>', lambda e: self.on_screen_click(e, 'left'))
+        self.fullscreen_canvas.bind('<Button-3>', lambda e: self.on_screen_click(e, 'right'))
+        self.fullscreen_canvas.bind('<MouseWheel>', self.on_screen_scroll)
+        self.fullscreen_canvas.bind('<Double-Button-1>', self.on_screen_double_click)
+        self.fullscreen_canvas.bind('<Key>', self.on_screen_key)
+        self.fullscreen_canvas.bind('<Enter>', lambda e: self.fullscreen_canvas.focus_set())
+        
+        self.fullscreen_btn.config(text="⛶ Quitter plein écran", bg=self.c['orange'])
+        self.log("📺 Mode plein écran activé")
+    
+    def exit_fullscreen(self):
+        """Quitte le mode plein écran"""
+        if not self.is_fullscreen:
+            return
+        
+        self.is_fullscreen = False
+        
+        if self.fullscreen_window:
+            self.fullscreen_window.destroy()
+            self.fullscreen_window = None
+            self.fullscreen_canvas = None
+        
+        self.fullscreen_btn.config(text="⛶ Plein écran", bg=self.c['blue'])
+        # Réinitialiser le cache de taille pour forcer le recalcul
+        if hasattr(self, '_last_canvas_size'):
+            delattr(self, '_last_canvas_size')
+        self.log("📺 Mode plein écran désactivé")
+    
+    def on_screen_double_click(self, event):
+        """Double-clic pour basculer plein écran ou double-clic distant"""
+        # Si on maintient Ctrl, on envoie un vrai double-clic
+        if event.state & 0x4:  # Ctrl pressed
+            if not self.screen_watching or not self.interact_var.get():
+                return
+            try:
+                canvas = event.widget
+                canvas_width = canvas.winfo_width()
+                canvas_height = canvas.winfo_height()
+                
+                rel_x = event.x - self.display_offset_x
+                rel_y = event.y - self.display_offset_y
+                
+                if rel_x < 0 or rel_y < 0 or rel_x > self.display_width or rel_y > self.display_height:
+                    return
+                
+                real_x = int(rel_x * self.screen_scale)
+                real_y = int(rel_y * self.screen_scale)
+                
+                self.log(f"🖱️ Double-clic ({real_x}, {real_y})")
+                self.send_command({
+                    'type': 'remote_dblclick',
+                    'x': real_x,
+                    'y': real_y
+                })
+            except:
+                pass
+        else:
+            # Sinon, basculer plein écran
+            self.toggle_fullscreen()
+    
     def update_screen(self, frame_data):
-        """Met à jour l'affichage de l'écran - VERSION OPTIMISÉE"""
+        """Met à jour l'affichage de l'écran - VERSION 30+ FPS"""
         if not HAS_PIL or not self.screen_watching:
             return
         
         try:
+            # Nouveaux noms courts ou anciens noms (compatibilité)
+            data = frame_data.get('d') or frame_data.get('data')
+            orig_w = frame_data.get('ow') or frame_data.get('original_width', 1920)
+            orig_h = frame_data.get('oh') or frame_data.get('original_height', 1080)
+            
             # Décoder l'image base64
-            img_data = base64.b64decode(frame_data['data'])
+            img_data = base64.b64decode(data)
             img = Image.open(io.BytesIO(img_data))
             
+            # Choisir le canvas actif (plein écran ou normal)
+            if self.is_fullscreen and self.fullscreen_canvas:
+                canvas = self.fullscreen_canvas
+            else:
+                canvas = self.screen_canvas
+            
             # Obtenir la taille du canvas
-            canvas_width = self.screen_canvas.winfo_width()
-            canvas_height = self.screen_canvas.winfo_height()
+            canvas_width = canvas.winfo_width()
+            canvas_height = canvas.winfo_height()
             
             if canvas_width < 50 or canvas_height < 50:
                 return
             
-            # Calculer la taille une seule fois si le canvas n'a pas changé
-            if not hasattr(self, '_last_canvas_size') or self._last_canvas_size != (canvas_width, canvas_height):
-                self._last_canvas_size = (canvas_width, canvas_height)
-                
+            # Calculer la taille - cache par canvas
+            cache_key = (canvas_width, canvas_height, id(canvas))
+            if not hasattr(self, '_size_cache') or self._size_cache.get('key') != cache_key:
                 img_ratio = img.width / img.height
                 canvas_ratio = canvas_width / canvas_height
                 
                 if img_ratio > canvas_ratio:
-                    self._target_width = canvas_width
-                    self._target_height = int(canvas_width / img_ratio)
+                    tw = canvas_width
+                    th = int(canvas_width / img_ratio)
                 else:
-                    self._target_height = canvas_height
-                    self._target_width = int(canvas_height * img_ratio)
+                    th = canvas_height
+                    tw = int(canvas_height * img_ratio)
                 
-                self.display_offset_x = (canvas_width - self._target_width) // 2
-                self.display_offset_y = (canvas_height - self._target_height) // 2
-                self.display_width = self._target_width
-                self.display_height = self._target_height
+                self._size_cache = {
+                    'key': cache_key,
+                    'tw': tw, 'th': th,
+                    'ox': (canvas_width - tw) // 2,
+                    'oy': (canvas_height - th) // 2
+                }
             
-            # Redimensionner avec NEAREST (le plus rapide)
-            if img.size != (self._target_width, self._target_height):
-                img = img.resize((self._target_width, self._target_height), Image.NEAREST)
+            sc = self._size_cache
+            self.display_offset_x = sc['ox']
+            self.display_offset_y = sc['oy']
+            self.display_width = sc['tw']
+            self.display_height = sc['th']
+            self.screen_scale = orig_w / sc['tw']
             
-            # Calculer l'échelle pour la conversion des coordonnées
-            self.screen_scale = frame_data['original_width'] / self._target_width
+            # Redimensionner seulement si nécessaire
+            if img.size != (sc['tw'], sc['th']):
+                img = img.resize((sc['tw'], sc['th']), Image.NEAREST)
             
-            # Convertir en PhotoImage
+            # Convertir et afficher
             self.current_frame = ImageTk.PhotoImage(img)
+            canvas.delete('screen_img')
+            canvas.create_image(canvas_width // 2, canvas_height // 2,
+                               image=self.current_frame, anchor='center', tags='screen_img')
             
-            # Afficher
-            self.screen_canvas.delete('screen_img')
-            self.screen_canvas.create_image(
-                canvas_width // 2, canvas_height // 2,
-                image=self.current_frame, anchor='center',
-                tags='screen_img'
-            )
-            
-            # Calculer FPS
+            # FPS counter
             self.frame_count += 1
             now = datetime.now()
             elapsed = (now - self.last_fps_time).total_seconds()
             if elapsed >= 1.0:
                 fps = self.frame_count / elapsed
-                self.fps_label.config(text=f"{fps:.1f} FPS")
+                fps_text = f"{fps:.1f} FPS"
+                self.fps_label.config(text=fps_text)
+                if self.is_fullscreen and hasattr(self, 'fullscreen_fps'):
+                    self.fullscreen_fps.config(text=fps_text)
                 self.frame_count = 0
                 self.last_fps_time = now
                 
-        except Exception as e:
+        except:
             pass
     
     def on_screen_click(self, event, button):
@@ -495,6 +627,9 @@ class DofusClient:
         
         # Convertir les coordonnées du canvas vers les coordonnées réelles
         try:
+            # Utiliser le canvas de l'événement
+            canvas = event.widget
+            
             # Position relative à l'image affichée
             rel_x = event.x - self.display_offset_x
             rel_y = event.y - self.display_offset_y
@@ -608,6 +743,11 @@ class DofusClient:
         self.running = False
         self.connected = False
         self.screen_watching = False
+        
+        # Quitter le plein écran si actif
+        if self.is_fullscreen:
+            self.exit_fullscreen()
+        
         self.connect_btn.config(text="🔌 SE CONNECTER", bg=self.c['green'])
         self.status_dot.config(fg=self.c['red'])
         self.screen_btn.config(text="▶️ Voir l'écran", bg=self.c['green'])
@@ -678,26 +818,21 @@ class DofusClient:
                 try:
                     data = json.loads(msg)
                     
-                    # Gérer les frames d'écran en priorité
-                    if data.get('type') == 'screen_frame':
-                        frame = data.get('frame')
+                    # Nouveau format compact ou ancien format
+                    msg_type = data.get('t') or data.get('type')
+                    
+                    # Frame d'écran (priorité haute)
+                    if msg_type in ('sf', 'screen_frame'):
+                        frame = data.get('f') or data.get('frame')
                         if frame and self.screen_watching:
-                            # Utiliser after_idle pour ne pas bloquer
                             self.root.after_idle(lambda f=frame: self.update_screen(f))
-                    elif data.get('type') == 'result':
+                    elif msg_type == 'result':
                         if data.get('success'):
                             self.root.after(0, lambda: self.log("✅ OK"))
-                    else:
-                        # Autres messages
-                        pass
-                except json.JSONDecodeError:
+                except:
                     pass
-                except Exception as e:
-                    pass
-        except websockets.exceptions.ConnectionClosed:
+        except:
             pass
-        except Exception as e:
-            self.root.after(0, lambda: self.log(f"❌ Réception: {e}"))
     
     async def send_loop(self, ws):
         while self.running and self.connected:
