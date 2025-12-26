@@ -3,6 +3,7 @@
 Agent autonome intelligent pour Dofus avec:
 - Navigation entre maps (graphe)
 - Détection et engagement de monstres
+- Détection et engagement de monstres- Détection et engagement de monstres
 - Système de combat intelligent (sorts, cooldowns, priorités)
 - Apprentissage par démonstration
 """
@@ -1429,3 +1430,4 @@ if __name__ == "__main__":
     
     app = AgentGUI()
     app.run()
+
