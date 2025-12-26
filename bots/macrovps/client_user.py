@@ -1,6 +1,6 @@
 """
-🎮 Client Dofus - Contrôle à distance
-Version simple et claire
+🎮 Client Dofus - Contrôle à distance avec VISUALISATION D'ÉCRAN
+Version avec partage d'écran en temps réel et interaction
 """
 
 import tkinter as tk
@@ -10,6 +10,8 @@ import os
 import threading
 import asyncio
 from datetime import datetime
+import base64
+import io
 
 # WebSocket
 try:
@@ -17,6 +19,13 @@ try:
     HAS_WEBSOCKETS = True
 except:
     HAS_WEBSOCKETS = False
+
+# PIL pour afficher les images
+try:
+    from PIL import Image, ImageTk
+    HAS_PIL = True
+except:
+    HAS_PIL = False
 
 
 class DofusClient:
@@ -37,6 +46,14 @@ class DofusClient:
         self.websocket = None
         self.loop = None
         self.send_queue = None
+        
+        # Screen state
+        self.screen_watching = False
+        self.screen_available = False
+        self.server_screen_width = 1920
+        self.server_screen_height = 1080
+        self.current_frame = None
+        self.screen_scale = 1.0  # Échelle pour conversion coordonnées
         
         # Couleurs
         self.c = {
@@ -84,10 +101,10 @@ class DofusClient:
     def setup_ui(self):
         self.root = tk.Tk()
         self.root.title("🎮 Client Dofus")
-        self.root.geometry("600x850")
+        self.root.geometry("900x900")
         self.root.configure(bg=self.c['bg'])
         self.root.resizable(True, True)
-        self.root.minsize(600, 800)
+        self.root.minsize(700, 800)
         
         # ===== HEADER =====
         header = tk.Frame(self.root, bg=self.c['card'], height=50)
@@ -159,34 +176,97 @@ class DofusClient:
         self.notebook = ttk.Notebook(self.root)
         self.notebook.pack(fill='both', expand=True, padx=15, pady=5)
         
-        # Tab 1: Chat
+        # Tab 1: Écran (NOUVEAU!)
+        self.create_screen_tab()
+        
+        # Tab 2: Chat
         self.create_chat_tab()
         
-        # Tab 2: Macros
+        # Tab 3: Macros
         self.create_macros_tab()
         
-        # Tab 3: Séquences
+        # Tab 4: Séquences
         self.create_sequences_tab()
         
         # ===== FOOTER LOG =====
-        log_frame = tk.Frame(self.root, bg=self.c['card'], height=100)
+        log_frame = tk.Frame(self.root, bg=self.c['card'], height=80)
         log_frame.pack(fill='x', padx=15, pady=10)
         log_frame.pack_propagate(False)
         
         self.log_text = tk.Text(log_frame, bg=self.c['card'], fg=self.c['text2'],
-                                font=('Consolas', 9), wrap='word', height=5,
+                                font=('Consolas', 9), wrap='word', height=4,
                                 relief='flat', state='disabled')
         self.log_text.pack(fill='both', expand=True, padx=10, pady=5)
+    
+    def create_screen_tab(self):
+        """Onglet de visualisation d'écran"""
+        tab = tk.Frame(self.notebook, bg=self.c['bg'])
+        self.notebook.add(tab, text="📺 Écran")
+        
+        # Contrôles en haut
+        controls = tk.Frame(tab, bg=self.c['card'], padx=10, pady=10)
+        controls.pack(fill='x', padx=5, pady=5)
+        
+        self.screen_btn = tk.Button(controls, text="▶️ Voir l'écran", 
+                                    font=('Segoe UI', 10, 'bold'),
+                                    bg=self.c['green'], fg='white', relief='flat',
+                                    command=self.toggle_screen, cursor='hand2')
+        self.screen_btn.pack(side='left', padx=5, ipadx=10, ipady=3)
+        
+        self.screen_status = tk.Label(controls, text="⚪ Arrêté", 
+                                      font=('Segoe UI', 10),
+                                      bg=self.c['card'], fg=self.c['text2'])
+        self.screen_status.pack(side='left', padx=15)
+        
+        # Checkbox pour interaction
+        self.interact_var = tk.BooleanVar(value=True)
+        self.interact_check = tk.Checkbutton(controls, text="🖱️ Permettre interaction",
+                                              variable=self.interact_var,
+                                              bg=self.c['card'], fg=self.c['text'],
+                                              selectcolor=self.c['input'],
+                                              activebackground=self.c['card'],
+                                              font=('Segoe UI', 9))
+        self.interact_check.pack(side='left', padx=10)
+        
+        self.fps_label = tk.Label(controls, text="", font=('Segoe UI', 9),
+                                  bg=self.c['card'], fg=self.c['blue'])
+        self.fps_label.pack(side='right', padx=10)
+        
+        # Zone d'affichage de l'écran
+        self.screen_frame = tk.Frame(tab, bg=self.c['input'])
+        self.screen_frame.pack(fill='both', expand=True, padx=5, pady=5)
+        
+        # Canvas pour l'image
+        self.screen_canvas = tk.Canvas(self.screen_frame, bg='#000000', 
+                                        highlightthickness=0, cursor='crosshair')
+        self.screen_canvas.pack(fill='both', expand=True)
+        
+        # Message initial
+        self.screen_canvas.create_text(400, 200, text="📺 Clique sur 'Voir l'écran' pour commencer",
+                                       fill=self.c['text2'], font=('Segoe UI', 14),
+                                       tags='placeholder')
+        
+        # Bindings pour l'interaction
+        self.screen_canvas.bind('<Button-1>', lambda e: self.on_screen_click(e, 'left'))
+        self.screen_canvas.bind('<Button-3>', lambda e: self.on_screen_click(e, 'right'))
+        self.screen_canvas.bind('<MouseWheel>', self.on_screen_scroll)
+        self.screen_canvas.bind('<Motion>', self.on_screen_motion)
+        
+        # Binding clavier (quand le canvas a le focus)
+        self.screen_canvas.bind('<Key>', self.on_screen_key)
+        self.screen_canvas.bind('<Enter>', lambda e: self.screen_canvas.focus_set())
+        
+        # Variables pour le FPS
+        self.frame_count = 0
+        self.last_fps_time = datetime.now()
     
     def create_chat_tab(self):
         tab = tk.Frame(self.notebook, bg=self.c['bg'])
         self.notebook.add(tab, text="💬 Chat")
         
-        # Zone principale
         main = tk.Frame(tab, bg=self.c['card'], padx=20, pady=20)
         main.pack(fill='both', expand=True, padx=10, pady=10)
         
-        # Envoyer message
         tk.Label(main, text="📤 Envoyer un message dans le jeu", 
                 font=('Segoe UI', 11, 'bold'),
                 bg=self.c['card'], fg=self.c['text']).pack(anchor='w', pady=(0,10))
@@ -204,153 +284,281 @@ class DofusClient:
                  bg=self.c['green'], fg='white', relief='flat',
                  command=self.send_chat).pack(side='left', ipadx=15, ipady=5)
         
-        # Séparateur
         tk.Frame(main, bg=self.c['input'], height=2).pack(fill='x', pady=20)
         
-        # Commandes rapides
-        tk.Label(main, text="⚡ Commandes rapides", font=('Segoe UI', 11, 'bold'),
-                bg=self.c['card'], fg=self.c['text']).pack(anchor='w', pady=(0,10))
-        
-        quick_frame = tk.Frame(main, bg=self.c['card'])
-        quick_frame.pack(fill='x')
-        
-        quick_cmds = [
-            (".tpgroupeall", "🏠 TP Groupe"),
-            (".movemobs", "👹 Move Mobs"),
-            ("/wave", "👋 Wave"),
-        ]
-        
-        for cmd, label in quick_cmds:
-            btn = tk.Button(quick_frame, text=label, font=('Segoe UI', 9),
-                           bg=self.c['input'], fg=self.c['text'], relief='flat',
-                           cursor='hand2', command=lambda c=cmd: self.quick_chat(c))
-            btn.pack(side='left', padx=5, ipadx=10, ipady=5)
-        
-        # Séparateur
-        tk.Frame(main, bg=self.c['input'], height=2).pack(fill='x', pady=20)
-        
-        # Clics
-        tk.Label(main, text="🖱️ Clic souris", font=('Segoe UI', 11, 'bold'),
+        # Clic
+        tk.Label(main, text="🖱️ Clic à une position", font=('Segoe UI', 11, 'bold'),
                 bg=self.c['card'], fg=self.c['text']).pack(anchor='w', pady=(0,10))
         
         click_row = tk.Frame(main, bg=self.c['card'])
-        click_row.pack(fill='x')
+        click_row.pack(fill='x', pady=5)
         
-        tk.Label(click_row, text="X", bg=self.c['card'], fg=self.c['text2']).pack(side='left')
-        self.click_x = tk.Entry(click_row, font=('Segoe UI', 11), width=6,
-                                bg=self.c['input'], fg=self.c['text'], relief='flat')
+        tk.Label(click_row, text="X:", bg=self.c['card'], fg=self.c['text']).pack(side='left')
+        self.click_x = tk.Entry(click_row, width=6, bg=self.c['input'], fg=self.c['text'], relief='flat')
         self.click_x.insert(0, "960")
-        self.click_x.pack(side='left', padx=5, ipady=5)
+        self.click_x.pack(side='left', padx=5, ipady=3)
         
-        tk.Label(click_row, text="Y", bg=self.c['card'], fg=self.c['text2']).pack(side='left', padx=(10,0))
-        self.click_y = tk.Entry(click_row, font=('Segoe UI', 11), width=6,
-                                bg=self.c['input'], fg=self.c['text'], relief='flat')
+        tk.Label(click_row, text="Y:", bg=self.c['card'], fg=self.c['text']).pack(side='left', padx=(10,0))
+        self.click_y = tk.Entry(click_row, width=6, bg=self.c['input'], fg=self.c['text'], relief='flat')
         self.click_y.insert(0, "540")
-        self.click_y.pack(side='left', padx=5, ipady=5)
+        self.click_y.pack(side='left', padx=5, ipady=3)
         
-        tk.Button(click_row, text="Clic gauche", font=('Segoe UI', 9),
-                 bg=self.c['blue'], fg='white', relief='flat',
-                 command=lambda: self.send_click('left')).pack(side='left', padx=10, ipadx=10, ipady=3)
+        tk.Button(click_row, text="Gauche", bg=self.c['accent'], fg='white', relief='flat',
+                 command=lambda: self.send_click('left')).pack(side='left', padx=10)
+        tk.Button(click_row, text="Droit", bg=self.c['orange'], fg='black', relief='flat',
+                 command=lambda: self.send_click('right')).pack(side='left')
         
-        tk.Button(click_row, text="Clic droit", font=('Segoe UI', 9),
-                 bg=self.c['orange'], fg='black', relief='flat',
-                 command=lambda: self.send_click('right')).pack(side='left', ipadx=10, ipady=3)
+        # Commandes rapides
+        tk.Frame(main, bg=self.c['input'], height=2).pack(fill='x', pady=20)
+        
+        tk.Label(main, text="⚡ Commandes rapides", font=('Segoe UI', 11, 'bold'),
+                bg=self.c['card'], fg=self.c['text']).pack(anchor='w', pady=(0,10))
+        
+        quick_row = tk.Frame(main, bg=self.c['card'])
+        quick_row.pack(fill='x')
+        
+        for cmd in ["/w ami ", "/g ", "/b "]:
+            tk.Button(quick_row, text=cmd, bg=self.c['input'], fg=self.c['text'], relief='flat',
+                     command=lambda c=cmd: self.quick_chat(c)).pack(side='left', padx=3)
     
     def create_macros_tab(self):
         tab = tk.Frame(self.notebook, bg=self.c['bg'])
-        self.notebook.add(tab, text="📝 Macros")
+        self.notebook.add(tab, text="⚡ Macros")
         
-        main = tk.Frame(tab, bg=self.c['card'], padx=20, pady=15)
+        main = tk.Frame(tab, bg=self.c['card'], padx=20, pady=20)
         main.pack(fill='both', expand=True, padx=10, pady=10)
         
-        # Ajouter macro
         tk.Label(main, text="➕ Nouvelle macro", font=('Segoe UI', 11, 'bold'),
-                bg=self.c['card'], fg=self.c['text']).pack(anchor='w')
+                bg=self.c['card'], fg=self.c['text']).pack(anchor='w', pady=(0,10))
         
         add_row = tk.Frame(main, bg=self.c['card'])
-        add_row.pack(fill='x', pady=10)
+        add_row.pack(fill='x', pady=5)
         
-        self.macro_name = tk.Entry(add_row, font=('Segoe UI', 10), width=12,
-                                   bg=self.c['input'], fg=self.c['text'], relief='flat')
+        self.macro_name = tk.Entry(add_row, width=10, bg=self.c['input'], 
+                                   fg=self.c['text'], relief='flat')
         self.macro_name.insert(0, "nom")
-        self.macro_name.pack(side='left', ipady=5, padx=(0,5))
+        self.macro_name.pack(side='left', ipady=5, padx=2)
         
-        self.macro_cmd = tk.Entry(add_row, font=('Segoe UI', 10), width=20,
-                                  bg=self.c['input'], fg=self.c['text'], relief='flat')
-        self.macro_cmd.insert(0, ".commande")
-        self.macro_cmd.pack(side='left', ipady=5, padx=5)
+        self.macro_cmd = tk.Entry(add_row, width=25, bg=self.c['input'],
+                                  fg=self.c['text'], relief='flat')
+        self.macro_cmd.insert(0, "/commande")
+        self.macro_cmd.pack(side='left', ipady=5, padx=2)
         
-        tk.Button(add_row, text="+ Ajouter", font=('Segoe UI', 9, 'bold'),
-                 bg=self.c['green'], fg='white', relief='flat',
-                 command=self.add_macro).pack(side='left', padx=10, ipadx=10, ipady=3)
+        tk.Button(add_row, text="➕", bg=self.c['green'], fg='white', relief='flat',
+                 command=self.add_macro).pack(side='left', padx=5)
         
-        # Liste
         tk.Frame(main, bg=self.c['input'], height=2).pack(fill='x', pady=15)
         
-        tk.Label(main, text="📋 Mes macros (clic pour exécuter)", font=('Segoe UI', 10),
-                bg=self.c['card'], fg=self.c['text2']).pack(anchor='w')
-        
-        # Scrollable frame
-        canvas = tk.Canvas(main, bg=self.c['card'], highlightthickness=0, height=180)
-        self.macros_frame = tk.Frame(canvas, bg=self.c['card'])
-        canvas.create_window((0, 0), window=self.macros_frame, anchor="nw")
-        canvas.pack(fill='both', expand=True, pady=10)
-        
-        self.macros_frame.bind("<Configure>", lambda e: canvas.configure(scrollregion=canvas.bbox("all")))
-        
+        self.macros_frame = tk.Frame(main, bg=self.c['card'])
+        self.macros_frame.pack(fill='both', expand=True)
         self.refresh_macros()
     
     def create_sequences_tab(self):
         tab = tk.Frame(self.notebook, bg=self.c['bg'])
         self.notebook.add(tab, text="🎬 Séquences")
         
-        main = tk.Frame(tab, bg=self.c['card'], padx=20, pady=15)
+        main = tk.Frame(tab, bg=self.c['card'], padx=20, pady=20)
         main.pack(fill='both', expand=True, padx=10, pady=10)
         
-        # Info
-        tk.Label(main, text="🎬 Séquences d'actions automatiques", 
-                font=('Segoe UI', 11, 'bold'),
+        tk.Label(main, text="➕ Nouvelle séquence", font=('Segoe UI', 11, 'bold'),
                 bg=self.c['card'], fg=self.c['text']).pack(anchor='w')
         
-        tk.Label(main, text="Format: wait=2;chat=.tp;click=500,300", 
-                font=('Segoe UI', 9),
-                bg=self.c['card'], fg=self.c['text2']).pack(anchor='w', pady=(0,10))
+        tk.Label(main, text="Format: wait=2; click=100,200; chat=/salut; key=enter",
+                font=('Segoe UI', 9), bg=self.c['card'], fg=self.c['text2']).pack(anchor='w', pady=(0,10))
         
-        # Ajouter
-        add_row1 = tk.Frame(main, bg=self.c['card'])
-        add_row1.pack(fill='x', pady=5)
+        add_row = tk.Frame(main, bg=self.c['card'])
+        add_row.pack(fill='x', pady=5)
         
-        tk.Label(add_row1, text="Nom:", bg=self.c['card'], fg=self.c['text2']).pack(side='left')
-        self.seq_name = tk.Entry(add_row1, font=('Segoe UI', 10), width=15,
-                                 bg=self.c['input'], fg=self.c['text'], relief='flat')
-        self.seq_name.pack(side='left', ipady=5, padx=5)
+        self.seq_name = tk.Entry(add_row, width=10, bg=self.c['input'],
+                                 fg=self.c['text'], relief='flat')
+        self.seq_name.insert(0, "nom")
+        self.seq_name.pack(side='left', ipady=5, padx=2)
         
-        add_row2 = tk.Frame(main, bg=self.c['card'])
-        add_row2.pack(fill='x', pady=5)
+        self.seq_actions = tk.Entry(add_row, width=35, bg=self.c['input'],
+                                    fg=self.c['text'], relief='flat')
+        self.seq_actions.pack(side='left', ipady=5, padx=2)
         
-        tk.Label(add_row2, text="Actions:", bg=self.c['card'], fg=self.c['text2']).pack(side='left')
-        self.seq_actions = tk.Entry(add_row2, font=('Segoe UI', 10), width=35,
-                                    bg=self.c['input'], fg=self.c['text'], relief='flat')
-        self.seq_actions.insert(0, "wait=2;chat=.tpgroupeall")
-        self.seq_actions.pack(side='left', ipady=5, padx=5)
+        tk.Button(add_row, text="➕", bg=self.c['green'], fg='white', relief='flat',
+                 command=self.add_sequence).pack(side='left', padx=5)
         
-        tk.Button(main, text="+ Ajouter séquence", font=('Segoe UI', 9, 'bold'),
-                 bg=self.c['green'], fg='white', relief='flat',
-                 command=self.add_sequence).pack(anchor='w', pady=10, ipadx=10, ipady=3)
+        tk.Frame(main, bg=self.c['input'], height=2).pack(fill='x', pady=15)
         
-        # Liste
-        tk.Frame(main, bg=self.c['input'], height=2).pack(fill='x', pady=10)
-        
-        canvas = tk.Canvas(main, bg=self.c['card'], highlightthickness=0, height=150)
-        self.sequences_frame = tk.Frame(canvas, bg=self.c['card'])
-        canvas.create_window((0, 0), window=self.sequences_frame, anchor="nw")
-        canvas.pack(fill='both', expand=True)
-        
-        self.sequences_frame.bind("<Configure>", lambda e: canvas.configure(scrollregion=canvas.bbox("all")))
-        
+        self.sequences_frame = tk.Frame(main, bg=self.c['card'])
+        self.sequences_frame.pack(fill='both', expand=True)
         self.refresh_sequences()
     
-    # ===== FONCTIONS =====
+    # ===== SCREEN METHODS =====
+    
+    def toggle_screen(self):
+        """Active/désactive le partage d'écran"""
+        if not self.connected:
+            self.log("❌ Non connecté!")
+            return
+        
+        if not self.screen_available:
+            self.log("❌ Partage d'écran non disponible sur le serveur")
+            return
+        
+        if self.screen_watching:
+            self.stop_screen()
+        else:
+            self.start_screen()
+    
+    def start_screen(self):
+        """Démarre la visualisation d'écran"""
+        self.screen_watching = True
+        self.screen_btn.config(text="⏹️ Arrêter", bg=self.c['red'])
+        self.screen_status.config(text="🟢 En cours...", fg=self.c['green'])
+        self.screen_canvas.delete('placeholder')
+        self.send_command({'type': 'start_screen'})
+        self.log("📺 Visualisation démarrée")
+    
+    def stop_screen(self):
+        """Arrête la visualisation d'écran"""
+        self.screen_watching = False
+        self.screen_btn.config(text="▶️ Voir l'écran", bg=self.c['green'])
+        self.screen_status.config(text="⚪ Arrêté", fg=self.c['text2'])
+        self.send_command({'type': 'stop_screen'})
+        self.log("📺 Visualisation arrêtée")
+    
+    def update_screen(self, frame_data):
+        """Met à jour l'affichage de l'écran"""
+        if not HAS_PIL:
+            return
+        
+        try:
+            # Décoder l'image base64
+            img_data = base64.b64decode(frame_data['data'])
+            img = Image.open(io.BytesIO(img_data))
+            
+            # Obtenir la taille du canvas
+            canvas_width = self.screen_canvas.winfo_width()
+            canvas_height = self.screen_canvas.winfo_height()
+            
+            if canvas_width < 10 or canvas_height < 10:
+                return
+            
+            # Redimensionner pour tenir dans le canvas tout en gardant le ratio
+            img_ratio = img.width / img.height
+            canvas_ratio = canvas_width / canvas_height
+            
+            if img_ratio > canvas_ratio:
+                new_width = canvas_width
+                new_height = int(canvas_width / img_ratio)
+            else:
+                new_height = canvas_height
+                new_width = int(canvas_height * img_ratio)
+            
+            img_resized = img.resize((new_width, new_height), Image.LANCZOS)
+            
+            # Calculer l'échelle pour la conversion des coordonnées
+            self.screen_scale = frame_data['original_width'] / new_width
+            self.display_offset_x = (canvas_width - new_width) // 2
+            self.display_offset_y = (canvas_height - new_height) // 2
+            self.display_width = new_width
+            self.display_height = new_height
+            
+            # Convertir en PhotoImage
+            self.current_frame = ImageTk.PhotoImage(img_resized)
+            
+            # Afficher
+            self.screen_canvas.delete('all')
+            self.screen_canvas.create_image(
+                canvas_width // 2, canvas_height // 2,
+                image=self.current_frame, anchor='center'
+            )
+            
+            # Calculer FPS
+            self.frame_count += 1
+            now = datetime.now()
+            elapsed = (now - self.last_fps_time).total_seconds()
+            if elapsed >= 1.0:
+                fps = self.frame_count / elapsed
+                self.fps_label.config(text=f"{fps:.1f} FPS")
+                self.frame_count = 0
+                self.last_fps_time = now
+                
+        except Exception as e:
+            pass
+    
+    def on_screen_click(self, event, button):
+        """Gère les clics sur l'écran distant"""
+        if not self.screen_watching or not self.interact_var.get():
+            return
+        
+        # Convertir les coordonnées du canvas vers les coordonnées réelles
+        try:
+            # Position relative à l'image affichée
+            rel_x = event.x - self.display_offset_x
+            rel_y = event.y - self.display_offset_y
+            
+            # Vérifier si on est dans l'image
+            if rel_x < 0 or rel_y < 0 or rel_x > self.display_width or rel_y > self.display_height:
+                return
+            
+            # Convertir vers coordonnées écran réelles
+            real_x = int(rel_x * self.screen_scale)
+            real_y = int(rel_y * self.screen_scale)
+            
+            self.log(f"🖱️ Clic {button} ({real_x}, {real_y})")
+            self.send_command({
+                'type': 'remote_click',
+                'x': real_x,
+                'y': real_y,
+                'button': button
+            })
+        except:
+            pass
+    
+    def on_screen_scroll(self, event):
+        """Gère le scroll sur l'écran distant"""
+        if not self.screen_watching or not self.interact_var.get():
+            return
+        
+        delta = event.delta // 120  # Normaliser le delta
+        self.send_command({
+            'type': 'remote_scroll',
+            'delta': delta
+        })
+    
+    def on_screen_motion(self, event):
+        """Gère le mouvement de souris (optionnel, peut être lourd)"""
+        pass  # Désactivé par défaut pour éviter le spam
+    
+    def on_screen_key(self, event):
+        """Gère les touches clavier sur l'écran distant"""
+        if not self.screen_watching or not self.interact_var.get():
+            return
+        
+        # Mapping des touches spéciales
+        key_map = {
+            'Return': 'enter',
+            'Escape': 'escape',
+            'BackSpace': 'backspace',
+            'Tab': 'tab',
+            'space': 'space',
+            'Up': 'up',
+            'Down': 'down',
+            'Left': 'left',
+            'Right': 'right',
+            'Delete': 'delete',
+            'Home': 'home',
+            'End': 'end',
+        }
+        
+        key = event.keysym
+        if key in key_map:
+            self.send_command({
+                'type': 'remote_key',
+                'key': key_map[key]
+            })
+        elif len(key) == 1:  # Caractère simple
+            self.send_command({
+                'type': 'remote_type',
+                'text': event.char
+            })
+    
+    # ===== LOG =====
     
     def log(self, msg):
         self.log_text.config(state='normal')
@@ -359,6 +567,8 @@ class DofusClient:
         self.log_text.see('end')
         self.log_text.config(state='disabled')
     
+    # ===== CONNECTION =====
+    
     def toggle_connection(self):
         if self.running:
             self.disconnect()
@@ -366,50 +576,45 @@ class DofusClient:
             self.connect()
     
     def connect(self):
-        if not HAS_WEBSOCKETS:
-            messagebox.showerror("Erreur", "pip install websockets")
-            return
+        self.server_host = self.host_entry.get().strip()
+        self.server_port = int(self.port_entry.get().strip())
+        self.auth_key = self.key_entry.get().strip()
+        self.save_config()
         
-        host = self.host_entry.get().strip()
-        if not host:
+        if not self.server_host:
             messagebox.showwarning("Attention", "Entre l'adresse du serveur!")
             return
         
-        self.server_host = host
-        self.server_port = int(self.port_entry.get())
-        self.auth_key = self.key_entry.get()
-        self.save_config()
-        
         self.running = True
-        self.connect_btn.config(text="⏹️ DÉCONNECTER", bg=self.c['red'])
+        self.connect_btn.config(text="🔌 DÉCONNECTER", bg=self.c['red'])
+        self.log(f"Connexion à {self.server_host}:{self.server_port}...")
         
         def run():
             self.loop = asyncio.new_event_loop()
             asyncio.set_event_loop(self.loop)
             self.send_queue = asyncio.Queue()
-            self.loop.run_until_complete(self.run_client())
-            self.root.after(0, self.on_disconnected)
+            self.loop.run_until_complete(self.connection_loop())
         
         threading.Thread(target=run, daemon=True).start()
     
     def disconnect(self):
         self.running = False
         self.connected = False
-    
-    def on_disconnected(self):
+        self.screen_watching = False
         self.connect_btn.config(text="🔌 SE CONNECTER", bg=self.c['green'])
         self.status_dot.config(fg=self.c['red'])
+        self.screen_btn.config(text="▶️ Voir l'écran", bg=self.c['green'])
+        self.screen_status.config(text="⚪ Arrêté", fg=self.c['text2'])
+        self.log("Déconnecté")
     
-    async def run_client(self):
-        uri = f"ws://{self.server_host}:{self.server_port}"
-        
+    async def connection_loop(self):
         while self.running:
             try:
-                self.root.after(0, lambda: self.log("Connexion..."))
-                self.root.after(0, lambda: self.status_dot.config(fg=self.c['orange']))
+                uri = f"ws://{self.server_host}:{self.server_port}"
                 
                 async with websockets.connect(uri) as ws:
                     self.websocket = ws
+                    self.root.after(0, lambda: self.log("Connecté, authentification..."))
                     
                     await ws.send(json.dumps({
                         'type': 'auth',
@@ -422,8 +627,15 @@ class DofusClient:
                     
                     if data.get('type') == 'auth_ok':
                         self.connected = True
+                        self.screen_available = data.get('screen_available', False)
+                        self.server_screen_width = data.get('screen_width', 1920)
+                        self.server_screen_height = data.get('screen_height', 1080)
+                        
                         self.root.after(0, lambda: self.log("✅ Connecté!"))
                         self.root.after(0, lambda: self.status_dot.config(fg=self.c['green']))
+                        
+                        if self.screen_available:
+                            self.root.after(0, lambda: self.log(f"📺 Partage d'écran disponible ({self.server_screen_width}x{self.server_screen_height})"))
                         
                         recv_task = asyncio.create_task(self.receive_loop(ws))
                         send_task = asyncio.create_task(self.send_loop(ws))
@@ -436,7 +648,7 @@ class DofusClient:
             except ConnectionRefusedError:
                 self.root.after(0, lambda: self.log("❌ Serveur indisponible"))
             except Exception as e:
-                self.root.after(0, lambda: self.log(f"❌ Erreur"))
+                self.root.after(0, lambda: self.log(f"❌ Erreur: {e}"))
             
             self.connected = False
             self.root.after(0, lambda: self.status_dot.config(fg=self.c['red']))
@@ -451,7 +663,13 @@ class DofusClient:
                 if not self.running:
                     break
                 data = json.loads(msg)
-                if data.get('success'):
+                
+                # Gérer les frames d'écran
+                if data.get('type') == 'screen_frame':
+                    frame = data.get('frame')
+                    if frame and self.screen_watching:
+                        self.root.after(0, lambda f=frame: self.update_screen(f))
+                elif data.get('success'):
                     self.root.after(0, lambda: self.log("✅ OK"))
         except:
             pass
@@ -613,9 +831,20 @@ class DofusClient:
 
 
 if __name__ == "__main__":
+    missing = []
     if not HAS_WEBSOCKETS:
+        missing.append("websockets")
+    
+    warnings = []
+    if not HAS_PIL:
+        warnings.append("Pillow (pour visualiser l'écran)")
+    
+    if missing:
         import tkinter.messagebox
-        tkinter.messagebox.showerror("Erreur", "pip install websockets")
+        tkinter.messagebox.showerror("Erreur", f"Modules manquants:\n\npip install {' '.join(missing)}")
     else:
+        if warnings:
+            print(f"⚠️ Modules optionnels manquants: {', '.join(warnings)}")
+            print(f"   pip install Pillow")
         app = DofusClient()
         app.run()
