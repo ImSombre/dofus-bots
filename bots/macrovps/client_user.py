@@ -55,6 +55,10 @@ class DofusClient:
         self.current_frame = None
         self.screen_scale = 1.0  # Échelle pour conversion coordonnées
         
+        # Drag state
+        self.is_dragging = False
+        self.drag_button = None
+        
         # Couleurs
         self.c = {
             'bg': '#0f0f1a',
@@ -249,18 +253,21 @@ class DofusClient:
         self.screen_canvas.pack(fill='both', expand=True)
         
         # Message initial
-        self.screen_canvas.create_text(400, 200, text="📺 Clique sur 'Voir l'écran' pour commencer\n\n[F11] ou [Échap] pour quitter le plein écran",
+        self.screen_canvas.create_text(400, 200, text="📺 Clique sur 'Voir l'écran' pour commencer\n\n[F11] pour plein écran • [Échap] pour quitter",
                                        fill=self.c['text2'], font=('Segoe UI', 14),
                                        tags='placeholder')
         
         # Bindings pour l'interaction
-        self.screen_canvas.bind('<Button-1>', lambda e: self.on_screen_click(e, 'left'))
-        self.screen_canvas.bind('<Button-3>', lambda e: self.on_screen_click(e, 'right'))
+        self.screen_canvas.bind('<ButtonPress-1>', lambda e: self.on_mouse_down(e, 'left'))
+        self.screen_canvas.bind('<ButtonRelease-1>', lambda e: self.on_mouse_up(e, 'left'))
+        self.screen_canvas.bind('<ButtonPress-3>', lambda e: self.on_mouse_down(e, 'right'))
+        self.screen_canvas.bind('<ButtonRelease-3>', lambda e: self.on_mouse_up(e, 'right'))
+        self.screen_canvas.bind('<B1-Motion>', self.on_mouse_drag)
+        self.screen_canvas.bind('<B3-Motion>', self.on_mouse_drag)
+        self.screen_canvas.bind('<Double-Button-1>', lambda e: self.on_double_click(e))
         self.screen_canvas.bind('<MouseWheel>', self.on_screen_scroll)
-        self.screen_canvas.bind('<Motion>', self.on_screen_motion)
-        self.screen_canvas.bind('<Double-Button-1>', self.on_screen_double_click)
         
-        # Binding clavier (quand le canvas a le focus)
+        # Binding clavier
         self.screen_canvas.bind('<Key>', self.on_screen_key)
         self.screen_canvas.bind('<Enter>', lambda e: self.screen_canvas.focus_set())
         
@@ -470,19 +477,23 @@ class DofusClient:
         self.fullscreen_fps.place(x=10, y=10)
         
         # Label aide
-        help_text = "[Échap] ou [F11] pour quitter • [Clic] pour interagir"
+        help_text = "[Échap] ou [F11] pour quitter"
         self.fullscreen_help = tk.Label(self.fullscreen_window, text=help_text,
                                         font=('Segoe UI', 9),
                                         bg='black', fg='#666666')
         self.fullscreen_help.place(relx=0.5, y=10, anchor='n')
         
-        # Bindings
+        # Bindings - même que le canvas normal
         self.fullscreen_window.bind('<Escape>', lambda e: self.exit_fullscreen())
         self.fullscreen_window.bind('<F11>', lambda e: self.exit_fullscreen())
-        self.fullscreen_canvas.bind('<Button-1>', lambda e: self.on_screen_click(e, 'left'))
-        self.fullscreen_canvas.bind('<Button-3>', lambda e: self.on_screen_click(e, 'right'))
+        self.fullscreen_canvas.bind('<ButtonPress-1>', lambda e: self.on_mouse_down(e, 'left'))
+        self.fullscreen_canvas.bind('<ButtonRelease-1>', lambda e: self.on_mouse_up(e, 'left'))
+        self.fullscreen_canvas.bind('<ButtonPress-3>', lambda e: self.on_mouse_down(e, 'right'))
+        self.fullscreen_canvas.bind('<ButtonRelease-3>', lambda e: self.on_mouse_up(e, 'right'))
+        self.fullscreen_canvas.bind('<B1-Motion>', self.on_mouse_drag)
+        self.fullscreen_canvas.bind('<B3-Motion>', self.on_mouse_drag)
+        self.fullscreen_canvas.bind('<Double-Button-1>', lambda e: self.on_double_click(e))
         self.fullscreen_canvas.bind('<MouseWheel>', self.on_screen_scroll)
-        self.fullscreen_canvas.bind('<Double-Button-1>', self.on_screen_double_click)
         self.fullscreen_canvas.bind('<Key>', self.on_screen_key)
         self.fullscreen_canvas.bind('<Enter>', lambda e: self.fullscreen_canvas.focus_set())
         
@@ -507,37 +518,112 @@ class DofusClient:
             delattr(self, '_last_canvas_size')
         self.log("📺 Mode plein écran désactivé")
     
-    def on_screen_double_click(self, event):
-        """Double-clic pour basculer plein écran ou double-clic distant"""
-        # Si on maintient Ctrl, on envoie un vrai double-clic
-        if event.state & 0x4:  # Ctrl pressed
-            if not self.screen_watching or not self.interact_var.get():
-                return
-            try:
-                canvas = event.widget
-                canvas_width = canvas.winfo_width()
-                canvas_height = canvas.winfo_height()
-                
-                rel_x = event.x - self.display_offset_x
-                rel_y = event.y - self.display_offset_y
-                
-                if rel_x < 0 or rel_y < 0 or rel_x > self.display_width or rel_y > self.display_height:
-                    return
-                
-                real_x = int(rel_x * self.screen_scale)
-                real_y = int(rel_y * self.screen_scale)
-                
-                self.log(f"🖱️ Double-clic ({real_x}, {real_y})")
+    def on_double_click(self, event):
+        """Double-clic distant (envoie un vrai double-clic)"""
+        if not self.screen_watching or not self.interact_var.get():
+            return
+        
+        try:
+            coords = self._get_real_coords(event)
+            if coords:
+                real_x, real_y = coords
                 self.send_command({
                     'type': 'remote_dblclick',
                     'x': real_x,
                     'y': real_y
                 })
-            except:
-                pass
-        else:
-            # Sinon, basculer plein écran
-            self.toggle_fullscreen()
+        except:
+            pass
+    
+    def on_mouse_down(self, event, button):
+        """Clic enfoncé - début du drag potentiel"""
+        if not self.screen_watching or not self.interact_var.get():
+            return
+        
+        try:
+            coords = self._get_real_coords(event)
+            if coords:
+                real_x, real_y = coords
+                self.is_dragging = True
+                self.drag_button = button
+                
+                # Envoyer mouse down
+                self.send_command({
+                    'type': 'remote_mousedown',
+                    'x': real_x,
+                    'y': real_y,
+                    'button': button
+                })
+        except:
+            pass
+    
+    def on_mouse_up(self, event, button):
+        """Clic relâché - fin du drag"""
+        if not self.screen_watching or not self.interact_var.get():
+            return
+        
+        try:
+            coords = self._get_real_coords(event)
+            if coords:
+                real_x, real_y = coords
+                
+                # Envoyer mouse up
+                self.send_command({
+                    'type': 'remote_mouseup',
+                    'x': real_x,
+                    'y': real_y,
+                    'button': button
+                })
+                
+            self.is_dragging = False
+            self.drag_button = None
+        except:
+            pass
+    
+    def on_mouse_drag(self, event):
+        """Mouvement de souris pendant le drag"""
+        if not self.screen_watching or not self.interact_var.get():
+            return
+        if not self.is_dragging:
+            return
+        
+        try:
+            coords = self._get_real_coords(event)
+            if coords:
+                real_x, real_y = coords
+                
+                # Envoyer position de la souris
+                self.send_command({
+                    'type': 'remote_mousemove',
+                    'x': real_x,
+                    'y': real_y
+                })
+        except:
+            pass
+    
+    def _get_real_coords(self, event):
+        """Convertit les coordonnées canvas en coordonnées écran réelles"""
+        try:
+            if not hasattr(self, 'display_offset_x'):
+                return None
+                
+            rel_x = event.x - self.display_offset_x
+            rel_y = event.y - self.display_offset_y
+            
+            # Vérifier si on est dans l'image
+            if rel_x < 0 or rel_y < 0 or rel_x > self.display_width or rel_y > self.display_height:
+                return None
+            
+            real_x = int(rel_x * self.screen_scale)
+            real_y = int(rel_y * self.screen_scale)
+            
+            return (real_x, real_y)
+        except:
+            return None
+    
+    # Garder pour compatibilité
+    def on_screen_double_click(self, event):
+        self.on_double_click(event)
     
     def update_screen(self, frame_data):
         """Met à jour l'affichage de l'écran - VERSION 30+ FPS"""
@@ -621,36 +707,9 @@ class DofusClient:
             pass
     
     def on_screen_click(self, event, button):
-        """Gère les clics sur l'écran distant"""
-        if not self.screen_watching or not self.interact_var.get():
-            return
-        
-        # Convertir les coordonnées du canvas vers les coordonnées réelles
-        try:
-            # Utiliser le canvas de l'événement
-            canvas = event.widget
-            
-            # Position relative à l'image affichée
-            rel_x = event.x - self.display_offset_x
-            rel_y = event.y - self.display_offset_y
-            
-            # Vérifier si on est dans l'image
-            if rel_x < 0 or rel_y < 0 or rel_x > self.display_width or rel_y > self.display_height:
-                return
-            
-            # Convertir vers coordonnées écran réelles
-            real_x = int(rel_x * self.screen_scale)
-            real_y = int(rel_y * self.screen_scale)
-            
-            self.log(f"🖱️ Clic {button} ({real_x}, {real_y})")
-            self.send_command({
-                'type': 'remote_click',
-                'x': real_x,
-                'y': real_y,
-                'button': button
-            })
-        except:
-            pass
+        """Ancien handler - redirige vers on_mouse_down/up"""
+        self.on_mouse_down(event, button)
+        self.root.after(50, lambda: self.on_mouse_up(event, button))
     
     def on_screen_scroll(self, event):
         """Gère le scroll sur l'écran distant"""
@@ -662,10 +721,6 @@ class DofusClient:
             'type': 'remote_scroll',
             'delta': delta
         })
-    
-    def on_screen_motion(self, event):
-        """Gère le mouvement de souris (optionnel, peut être lourd)"""
-        pass  # Désactivé par défaut pour éviter le spam
     
     def on_screen_key(self, event):
         """Gère les touches clavier sur l'écran distant"""
