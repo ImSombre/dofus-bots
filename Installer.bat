@@ -102,6 +102,14 @@ echo      [*] pynput...
 pip install pynput --quiet 2>nul
 echo          [OK]
 
+echo      [*] websockets...
+pip install websockets --quiet 2>nul
+echo          [OK]
+
+echo      [*] mss (capture ecran rapide)...
+pip install mss --quiet 2>nul
+echo          [OK]
+
 echo.
 echo  ╔═══════════════════════════════════════════════════════╗
 echo  ║                                                       ║
@@ -109,6 +117,8 @@ echo  ║        ✅ INSTALLATION TERMINEE !                    ║
 echo  ║                                                       ║
 echo  ║        Pour lancer le Hub:                           ║
 echo  ║        → Double-clic sur "Lancer_Hub.vbs"            ║
+echo  ║                                                       ║
+echo  ║        📺 Partage d'ecran: ACTIVE                    ║
 echo  ║                                                       ║
 echo  ╚═══════════════════════════════════════════════════════╝
 echo.
